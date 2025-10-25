@@ -1,0 +1,41 @@
+# Configuration file for robot tracking system
+
+# Camera settings
+camera_node:
+  ros__parameters:
+    frame_width: 640
+    frame_height: 480
+    fps: 30
+
+# Tracking settings
+tracking_node:
+  ros__parameters:
+    max_speed: 100
+    center_threshold: 30.0
+    angle_send_threshold: 5.0
+    steering_delay: 0.3
+    max_distance: 200.0
+
+# Hardware interface settings
+hardware_node:
+  ros__parameters:
+    serial_port: "/dev/ttyACM0"
+    serial_baud: 115200
+    max_speed: 100
+    wheel_drive_dir: [1, 1, 1, 1]
+    steer_dir: [1, 1, 1, 1]
+    steer_offsets: [0, 0, 0, 0]
+
+# Teleop settings
+teleop_node:
+  ros__parameters:
+    max_speed: 100
+    deadzone: 0.18
+    max_angular: 1.0
+
+# Joy node settings
+joy_node:
+  ros__parameters:
+    dev: "/dev/input/js0"
+    deadzone: 0.3
+    autorepeat_rate: 20.0

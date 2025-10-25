@@ -1,0 +1,17 @@
+teleop_twist_joy:
+  ros__parameters:
+    require_enable_button: false
+    enable_button: 5
+    enable_turbo_button: 4
+
+    axis_linear.x: 4
+    axis_linear.y: 3
+    axis_angular.z: 0
+
+    scale_linear.x: 1.5
+    scale_linear.y: 1.5
+    scale_angular.z: 2.5
+
+    scale_linear_turbo.x: 3.0
+    scale_linear_turbo.y: 3.0
+    scale_angular_turbo.z: 4.0
