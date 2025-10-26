@@ -3,8 +3,8 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+from geometry_msgs.msg import Twist, Point
+from std_msgs.msg import Bool, Float64MultiArray
 from std_srvs.srv import SetBool
 from cv_bridge import CvBridge
 import cv2
@@ -22,6 +22,9 @@ class TrackingNode(Node):
         self.declare_parameter('angle_send_threshold', 5.0)
         self.declare_parameter('steering_delay', 0.3)
         self.declare_parameter('max_distance', 200.0)
+        self.declare_parameter('frame_width', 640)
+        self.declare_parameter('frame_height', 480)
+        self.declare_parameter('pwm_change_threshold', 20)
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -29,6 +32,9 @@ class TrackingNode(Node):
         self.angle_send_threshold = self.get_parameter('angle_send_threshold').value
         self.steering_delay = self.get_parameter('steering_delay').value
         self.max_distance = self.get_parameter('max_distance').value
+        self.frame_width = self.get_parameter('frame_width').value
+        self.frame_height = self.get_parameter('frame_height').value
+        self.pwm_change_threshold = self.get_parameter('pwm_change_threshold').value
         
         # Initialize OpenCV bridge
         self.bridge = CvBridge()
@@ -41,6 +47,7 @@ class TrackingNode(Node):
         self.steering_ready = True
         self.last_sent_angle = None
         self.last_steer_command_time = 0.0
+        self.last_drive_speed = 0
         
         # Optical flow parameters
         self.lk_params = dict(
@@ -56,18 +63,40 @@ class TrackingNode(Node):
         self.image_subscription = self.create_subscription(
             Image, '/camera/image', self.image_callback, 10)
         
-        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Publish to /auto/cmd_vel to avoid conflicts with manual control
+        self.cmd_vel_publisher = self.create_publisher(Twist, '/auto/cmd_vel', 10)
+        self.steering_publisher = self.create_publisher(Float64MultiArray, '/steering_angles', 10)
         self.tracking_status_publisher = self.create_publisher(Bool, '/tracking/active', 10)
+        self.tracking_center_publisher = self.create_publisher(Point, '/tracking/center', 10)
         
-        # Create service for starting/stopping tracking
+        # Create services
         from std_srvs.srv import SetBool
         self.tracking_service = self.create_service(
             SetBool, '/tracking/toggle', self.toggle_tracking_callback)
+        
+        # Subscription for tracking point selection (from object_selector)
+        self.select_point_subscription = self.create_subscription(
+            Point, '/tracking/select_point', self.select_point_callback, 10)
         
         # Create timer for status publishing
         self.status_timer = self.create_timer(0.1, self.publish_status)
         
         self.get_logger().info('Tracking node started')
+    
+    def select_point_callback(self, msg):
+        """Handle point selection from object selector GUI"""
+        x, y = int(msg.x), int(msg.y)
+        self.get_logger().info(f"Point selected at ({x}, {y})")
+        
+        # This will be set on next frame
+        self.tracking_active = True
+        self.original_center = (x, y)
+        self.last_center = None
+        self.smoothed_angle = None
+        self.steering_ready = True
+        self.last_sent_angle = None
+        self.prev_points = None  # Reset optical flow
+        self.prev_gray = None
     
     def image_callback(self, msg):
         """Process incoming camera frames"""
@@ -78,6 +107,25 @@ class TrackingNode(Node):
             # Convert ROS image to OpenCV
             frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # Initialize tracking on first frame after point selection
+            if self.prev_points is None and self.original_center is not None:
+                x, y = self.original_center
+                half = 5
+                x1, y1 = max(0, x - half), max(0, y - half)
+                x2, y2 = min(gray.shape[1] - 1, x + half), min(gray.shape[0] - 1, y + half)
+                mask = np.zeros_like(gray)
+                cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+                self.prev_points = cv2.goodFeaturesToTrack(
+                    gray, mask=mask, maxCorners=30, qualityLevel=0.15, minDistance=5, blockSize=10
+                )
+                if self.prev_points is not None:
+                    self.prev_gray = gray.copy()
+                    self.get_logger().info(f"Initialized tracking with {len(self.prev_points)} points")
+                else:
+                    self.get_logger().warn("No good features found at selected point")
+                    self.tracking_active = False
+                return
             
             if self.prev_points is not None and self.prev_gray is not None:
                 # Track points using optical flow
@@ -98,6 +146,13 @@ class TrackingNode(Node):
                         # Calculate center of tracked points
                         center = np.mean(good_new, axis=0)
                         cx, cy = int(center[0]), int(center[1])
+                        
+                        # Publish tracking center for visualization
+                        center_msg = Point()
+                        center_msg.x = float(cx)
+                        center_msg.y = float(cy)
+                        center_msg.z = 0.0
+                        self.tracking_center_publisher.publish(center_msg)
                         
                         # Process movement
                         self.process_movement((cx, cy))
@@ -174,18 +229,24 @@ class TrackingNode(Node):
         self.last_center = (cx, cy)
     
     def send_steering_command(self, angle):
-        """Send steering command (will be handled by hardware node)"""
-        # For now, we'll publish the angle as a custom message
-        # In a full implementation, this would be handled by the hardware node
-        self.get_logger().info(f"Steering to angle: {angle}")
+        """Send steering command to hardware node"""
+        # Publish raw angle - hardware node will apply per-wheel offsets
+        steering_msg = Float64MultiArray()
+        steering_msg.data = [float(angle), float(angle), float(angle), float(angle)]
+        self.steering_publisher.publish(steering_msg)
+        self.get_logger().debug(f"Steering to angle: {angle:.1f}°")
     
     def send_movement_command(self, speed):
         """Send movement command as Twist message"""
-        twist = Twist()
-        twist.linear.x = float(speed)  # Forward/backward speed
-        twist.linear.y = 0.0          # Lateral speed (not used in this implementation)
-        twist.angular.z = 0.0          # Rotation speed
-        self.cmd_vel_publisher.publish(twist)
+        # Only send if speed changed significantly
+        if abs(speed - self.last_drive_speed) >= self.pwm_change_threshold:
+            twist = Twist()
+            twist.linear.x = float(speed)  # Forward/backward speed
+            twist.linear.y = 0.0          # Lateral speed (not used in this implementation)
+            twist.angular.z = 0.0          # Rotation speed
+            self.cmd_vel_publisher.publish(twist)
+            self.last_drive_speed = speed
+            self.get_logger().debug(f"Drive speed: {speed}")
     
     def stop_robot(self):
         """Stop robot movement"""

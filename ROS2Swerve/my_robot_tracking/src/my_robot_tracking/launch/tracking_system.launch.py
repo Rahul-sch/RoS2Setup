@@ -43,12 +43,19 @@ def generate_launch_description():
         description='Enable teleop node'
     )
     
+    object_selector_enabled_arg = DeclareLaunchArgument(
+        'object_selector_enabled',
+        default_value='true',
+        description='Enable object selector GUI node'
+    )
+    
     # Get launch configurations
     use_sim_time = LaunchConfiguration('use_sim_time')
     camera_enabled = LaunchConfiguration('camera_enabled')
     tracking_enabled = LaunchConfiguration('tracking_enabled')
     hardware_enabled = LaunchConfiguration('hardware_enabled')
     teleop_enabled = LaunchConfiguration('teleop_enabled')
+    object_selector_enabled = LaunchConfiguration('object_selector_enabled')
     
     # Camera node
     camera_node = Node(
@@ -77,7 +84,10 @@ def generate_launch_description():
             'center_threshold': 30.0,
             'angle_send_threshold': 5.0,
             'steering_delay': 0.3,
-            'max_distance': 200.0
+            'max_distance': 200.0,
+            'frame_width': 640,
+            'frame_height': 480,
+            'pwm_change_threshold': 20
         }],
         condition=IfCondition(tracking_enabled)
     )
@@ -90,12 +100,14 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'serial_port': '/dev/ttyACM0',
+            'serial_port': '',  # Empty = auto-detect
             'serial_baud': 115200,
             'max_speed': 100,
             'wheel_drive_dir': [1, 1, 1, 1],
             'steer_dir': [1, 1, 1, 1],
-            'steer_offsets': [0, 0, 0, 0]
+            'steer_offsets': [0, 0, 0, 0],
+            'auto_mode_topic': '/auto/cmd_vel',
+            'manual_mode_topic': '/manual/cmd_vel'
         }],
         condition=IfCondition(hardware_enabled)
     )
@@ -130,15 +142,29 @@ def generate_launch_description():
         condition=IfCondition(teleop_enabled)
     )
     
+    # Object selector GUI node
+    object_selector_node = Node(
+        package='my_robot_tracking',
+        executable='object_selector',
+        name='object_selector',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time
+        }],
+        condition=IfCondition(object_selector_enabled)
+    )
+    
     return LaunchDescription([
         use_sim_time_arg,
         camera_enabled_arg,
         tracking_enabled_arg,
         hardware_enabled_arg,
         teleop_enabled_arg,
+        object_selector_enabled_arg,
         camera_node,
         tracking_node,
         hardware_node,
         teleop_node,
         joy_node,
+        object_selector_node,
     ])

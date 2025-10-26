@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool
 import math
 
@@ -27,11 +28,22 @@ class TeleopNode(Node):
         self.manual_target_angle = 0.0
         self.current_manual_angle = None
         
+        # Initialize joystick axes
+        self.forward_axis = 0.0
+        self.lateral_axis = 0.0
+        self.angular_axis = 0.0
+        self.left_trigger = 0.0
+        self.right_trigger = 0.0
+        self.last_left_trigger = False
+        self.last_right_trigger = False
+        
         # Create subscribers and publishers
         self.joy_subscription = self.create_subscription(
             Joy, '/joy', self.joy_callback, 10)
         
-        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Publish to /manual/cmd_vel to avoid conflicts with auto tracking
+        self.cmd_vel_publisher = self.create_publisher(Twist, '/manual/cmd_vel', 10)
+        self.steering_publisher = self.create_publisher(Float64MultiArray, '/manual/steering_angles', 10)
         
         # Create service for mode switching
         self.mode_service = self.create_service(
@@ -62,30 +74,35 @@ class TeleopNode(Node):
         # Manual control
         if self.manual_mode and len(msg.axes) >= 4:
             # Left stick Y axis (forward/backward)
-            forward_axis = -msg.axes[1]  # Invert Y axis
+            self.forward_axis = -msg.axes[1] if len(msg.axes) > 1 else 0.0
             
             # Left stick X axis (left/right strafe)
-            lateral_axis = msg.axes[0]
+            self.lateral_axis = msg.axes[0] if len(msg.axes) > 0 else 0.0
             
             # Right stick X axis (rotation)
-            angular_axis = msg.axes[2]
+            self.angular_axis = msg.axes[2] if len(msg.axes) > 2 else 0.0
             
-            # Triggers for steering (axes 2 and 5)
-            left_trigger = (msg.axes[2] + 1.0) / 2.0  # Convert from [-1,1] to [0,1]
-            right_trigger = (msg.axes[5] + 1.0) / 2.0
+            # Triggers for steering (axes 2 and 5 on Xbox controller)
+            # On Linux, triggers are typically axes 2 and 5, ranging from -1 to 1
+            self.left_trigger = (msg.axes[2] + 1.0) / 2.0 if len(msg.axes) > 2 else 0.0
+            self.right_trigger = (msg.axes[5] + 1.0) / 2.0 if len(msg.axes) > 5 else 0.0
             
-            # Handle steering with triggers
-            if left_trigger > 0.5:
-                self.manual_target_angle -= 45
-                self.manual_target_angle = self.manual_target_angle % 360
-            if right_trigger > 0.5:
-                self.manual_target_angle += 45
-                self.manual_target_angle = self.manual_target_angle % 360
+            # Handle steering with triggers (edge detection)
+            left_trigger_pressed = self.left_trigger > 0.5
+            right_trigger_pressed = self.right_trigger > 0.5
             
-            # Store axes for processing in timer
-            self.forward_axis = forward_axis
-            self.lateral_axis = lateral_axis
-            self.angular_axis = angular_axis
+            if left_trigger_pressed and not self.last_left_trigger:
+                self.manual_target_angle = (self.manual_target_angle - 45) % 360
+                self.send_steering_command()
+                self.get_logger().info(f"Steering left to {self.manual_target_angle}°")
+            
+            if right_trigger_pressed and not self.last_right_trigger:
+                self.manual_target_angle = (self.manual_target_angle + 45) % 360
+                self.send_steering_command()
+                self.get_logger().info(f"Steering right to {self.manual_target_angle}°")
+            
+            self.last_left_trigger = left_trigger_pressed
+            self.last_right_trigger = right_trigger_pressed
         else:
             # Auto mode - don't send manual commands
             self.forward_axis = 0.0
@@ -125,6 +142,13 @@ class TeleopNode(Node):
         response.success = True
         response.message = f"Mode switched to {mode}"
         return response
+    
+    def send_steering_command(self):
+        """Send steering command to hardware node"""
+        steering_msg = Float64MultiArray()
+        # Send same angle for all 4 wheels - hardware node will apply offsets
+        steering_msg.data = [float(self.manual_target_angle)] * 4
+        self.steering_publisher.publish(steering_msg)
     
     def normalize_axis(self, value, min_val=-1.0, max_val=1.0):
         """Normalize axis value (from your track.py)"""
