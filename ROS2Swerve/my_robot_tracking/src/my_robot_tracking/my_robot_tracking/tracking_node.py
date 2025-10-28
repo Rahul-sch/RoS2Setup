@@ -150,7 +150,7 @@ class TrackingNode(Node):
                     status = status.reshape(-1)
                     good_new = next_points[status == 1]
                     
-                    if len(good_new) >= 5:  # Need minimum points to track
+                    if len(good_new) > 0:  # Track with ANY points (like track.py)
                         # Reset lost frames counter when tracking succeeds
                         self.lost_frames = 0
                         
