@@ -375,7 +375,8 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("Shutting down - stopping robot...")
+        node.stop_robot()  # Stop all movement
     finally:
         node.destroy_node()
         rclpy.shutdown()

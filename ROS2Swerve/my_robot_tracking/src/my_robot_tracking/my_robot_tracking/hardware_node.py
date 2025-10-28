@@ -272,8 +272,14 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("Shutting down - stopping motors and steering...")
+        # Send stop commands
+        node.send_drive_command([1500, 1500, 1500, 1500])
+        time.sleep(0.1)
     finally:
+        # Close serial connection
+        if node.ser and node.ser.is_open:
+            node.ser.close()
         node.destroy_node()
         rclpy.shutdown()
 
