@@ -140,65 +140,81 @@ class TrackingNode(Node):
                 return
             
             if self.prev_points is not None and self.prev_gray is not None:
-                # Track points using optical flow
+                # EXACT track.py optical flow implementation
                 next_points, status, err = cv2.calcOpticalFlowPyrLK(
                     self.prev_gray, gray, self.prev_points, None, **self.lk_params
                 )
                 
-                if next_points is not None and status is not None:
-                    next_points = next_points.reshape(-1, 2)
-                    status = status.reshape(-1)
-                    good_new = next_points[status == 1]
+                if next_points is None or status is None or err is None:
+                    self.tracking_active = False
+                    return
                     
-                    if len(good_new) > 0:  # Track with ANY points (like track.py)
-                        # Reset lost frames counter when tracking succeeds
-                        self.lost_frames = 0
-                        
-                        # Update tracking points
-                        self.prev_points = good_new.reshape(-1, 1, 2)
-                        self.prev_gray = gray.copy()
-                        
-                        # Calculate center of tracked points
-                        center = np.mean(good_new, axis=0)
-                        cx, cy = int(center[0]), int(center[1])
-                        
-                        # Publish tracking center for visualization
-                        center_msg = Point()
-                        center_msg.x = float(cx)
-                        center_msg.y = float(cy)
-                        center_msg.z = 0.0
-                        self.tracking_center_publisher.publish(center_msg)
-                        
-                        # Process movement
-                        self.process_movement((cx, cy))
-                    else:
-                        self.lost_frames += 1
-                        self.get_logger().warn(f"Lost tracking points (only {len(good_new)} left), lost_frames: {self.lost_frames}")
-                        
-                        # Try to reacquire features like track.py
-                        if self.lost_frames >= self.REACQUIRE_INTERVAL and self.last_center is not None:
-                            x, y = self.last_center
-                            expansion = self.REACQUIRE_RADIUS
-                            x1, y1 = max(0, x - expansion), max(0, y - expansion)
-                            x2, y2 = min(gray.shape[1] - 1, x + expansion), min(gray.shape[0] - 1, y + expansion)
-                            mask = np.zeros_like(gray)
-                            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-                            new_features = cv2.goodFeaturesToTrack(
-                                gray, mask=mask, maxCorners=40, qualityLevel=0.15, minDistance=5, blockSize=10
-                            )
-                            if new_features is not None:
-                                self.get_logger().info(f"Reacquired {len(new_features)} features")
-                                self.prev_points = new_features
-                                self.prev_gray = gray.copy()
-                                self.lost_frames = 0
-                                return
-                        
-                        # Keep trying with fewer points
-                        if len(good_new) > 0:
-                            self.prev_points = good_new.reshape(-1, 1, 2)
-                        else:
-                            self.prev_points = None
-                            self.stop_robot()
+                next_points = next_points.reshape(-1, 2)
+                status = status.reshape(-1)
+                err = err.reshape(-1)
+                good_new = next_points[status == 1]
+                good_old = self.prev_points[status == 1]
+                good_err = err[status == 1]
+                
+                if len(good_new) == 0:
+                    self.lost_frames += 1
+                    self.stop_robot()
+                    return
+                    
+                # Track.py error and motion filtering
+                avg_err = np.mean(good_err)
+                motion_mag = np.mean(np.linalg.norm(good_new - good_old, axis=1))
+                if avg_err > 25.0 or motion_mag > 40.0:
+                    self.get_logger().warn(f"[OCCLUDED] AvgErr={avg_err:.1f}, Motion={motion_mag:.1f} → freeze")
+                    self.stop_robot()
+                    self.lost_frames += 1
+                    return
+                    
+                # Use only reliable points (like track.py)
+                reliable_mask = good_err < 25.0
+                reliable_points = good_new[reliable_mask]
+                
+                if len(reliable_points) >= 1:
+                    # Tracking successful
+                    self.lost_frames = 0
+                    self.prev_points = reliable_points.reshape(-1, 1, 2)
+                    self.prev_gray = gray.copy()
+                    
+                    # Calculate center
+                    avg_new = np.mean(reliable_points, axis=0)
+                    cx, cy = int(avg_new[0]), int(avg_new[1])
+                    self.last_center = (cx, cy)
+                    
+                    # Publish tracking center for visualization
+                    center_msg = Point()
+                    center_msg.x = float(cx)
+                    center_msg.y = float(cy)
+                    center_msg.z = 0.0
+                    self.tracking_center_publisher.publish(center_msg)
+                    
+                    # Process movement
+                    self.process_movement((cx, cy))
+                else:
+                    # No reliable points - try reacquisition
+                    self.lost_frames += 1
+                    self.stop_robot()
+                    
+                    # Track.py reacquisition logic
+                    if self.lost_frames % self.REACQUIRE_INTERVAL == 0 and self.last_center is not None:
+                        expansion = min(3 * self.REACQUIRE_RADIUS, self.REACQUIRE_RADIUS + int(self.lost_frames * 1.5))
+                        x, y = map(int, self.last_center)
+                        mask = np.zeros_like(gray)
+                        x1, y1 = max(0, x - expansion), max(0, y - expansion)
+                        x2, y2 = min(gray.shape[1] - 1, x + expansion), min(gray.shape[0] - 1, y + expansion)
+                        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+                        new_features = cv2.goodFeaturesToTrack(
+                            gray, mask=mask, maxCorners=40, qualityLevel=0.15, minDistance=5, blockSize=10
+                        )
+                        if new_features is not None:
+                            self.get_logger().info(f"[AUTO] Reacquired {len(new_features)} features")
+                            self.prev_points = new_features
+                            self.prev_gray = gray.copy()
+                            self.lost_frames = 0
             else:
                 self.prev_gray = gray.copy()
                 
