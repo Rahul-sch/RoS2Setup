@@ -68,6 +68,12 @@ class HardwareNode(Node):
     def connect_to_arduino(self):
         """Connect to Arduino (from your track.py)"""
         try:
+            # Close existing connection if open
+            if self.ser and self.ser.is_open:
+                self.get_logger().info("Closing existing serial connection...")
+                self.ser.close()
+                time.sleep(0.1)
+            
             # Auto-detect serial port if not specified
             port = self.serial_port
             if not port:
@@ -76,6 +82,14 @@ class HardwareNode(Node):
                     raise FileNotFoundError("No serial devices matching /dev/ttyACM* or /dev/ttyUSB* found")
                 port = candidates[0]
                 self.get_logger().info(f"Auto-detected serial port: {port}")
+            
+            # Try to close the port if it's locked
+            try:
+                temp_ser = serial.Serial(port, timeout=0.1)
+                temp_ser.close()
+                time.sleep(0.1)
+            except:
+                pass  # Port might not exist yet, that's ok
             
             self.ser = serial.Serial(
                 port,
