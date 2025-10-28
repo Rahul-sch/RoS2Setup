@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 import os
 from glob import glob
 
@@ -7,7 +7,8 @@ package_name = 'my_robot_tracking'
 setup(
     name=package_name,
     version='1.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=[package_name, package_name + '.scripts'],
+    package_dir={'': '.'},
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -15,7 +16,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
-    install_requires=['setuptools', 'opencv-python', 'numpy', 'pyserial'],
+    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='User',
     maintainer_email='user@example.com',
@@ -32,3 +33,5 @@ setup(
         ],
     },
 )
+
+//

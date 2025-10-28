@@ -1,0 +1,25 @@
+Run these commands on Ubuntu to diagnose:
+
+1. Check if package is found:
+   ros2 pkg list | grep my_robot_tracking
+
+2. Check what executables ROS2 sees:
+   ros2 pkg executables my_robot_tracking
+
+3. Check if setup.bash is correct:
+   cat install/setup.bash
+
+4. Check if executables actually exist:
+   ls -la install/my_robot_tracking/bin/
+
+5. Check Python path:
+   echo $PYTHONPATH
+
+6. Rebuild with verbose output:
+   cd ~/Ros2Setup/ROS2Swerve/my_robot_tracking
+   rm -rf build install log
+   colcon build --packages-select my_robot_tracking --symlink-install --event-handlers console_direct+ 2>&1 | tee build.log
+
+7. After building, check what was created:
+   find install/my_robot_tracking/bin/ -type f -executable
+

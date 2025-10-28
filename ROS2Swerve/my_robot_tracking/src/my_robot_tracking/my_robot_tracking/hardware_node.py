@@ -157,6 +157,7 @@ class HardwareNode(Node):
             
             # Convert to PWM values
             pwms = [1500 + self.wheel_drive_dir[i] * speed for i in range(4)]
+            self.get_logger().info(f"[{source}] Sending drive command: {pwms}")
             self.send_drive_command(pwms)
         else:
             # Stop
@@ -167,11 +168,13 @@ class HardwareNode(Node):
         speeds = [int(min(2000, max(1000, round(v)))) for v in speeds]
         cmd = f"D {speeds[0]} {speeds[1]} {speeds[2]} {speeds[3]}\n"
         
+        self.get_logger().info(f"[D] {cmd.strip()}")  # Like track.py!
+        
         with self.serial_lock:
             if self.ser and self.ser.is_open:
                 try:
                     self.ser.write(cmd.encode())
-                    self.get_logger().debug(f"Drive command: {cmd.strip()}")
+                    self.ser.flush()  # Force write immediately
                 except serial.SerialException as e:
                     self.get_logger().error(f"Drive command failed: {e}")
                     self.attempt_reconnect()
@@ -181,11 +184,13 @@ class HardwareNode(Node):
         angles = [int(round(v)) for v in angles]
         cmd = f"S {angles[0]} {angles[1]} {angles[2]} {angles[3]}\n"
         
+        self.get_logger().info(f"[S] {cmd.strip()}")  # Like track.py!
+        
         with self.serial_lock:
             if self.ser and self.ser.is_open:
                 try:
                     self.ser.write(cmd.encode())
-                    self.get_logger().debug(f"Steer command: {cmd.strip()}")
+                    self.ser.flush()  # Force write immediately
                     return True
                 except serial.SerialException as e:
                     self.get_logger().error(f"Steer command failed: {e}")
