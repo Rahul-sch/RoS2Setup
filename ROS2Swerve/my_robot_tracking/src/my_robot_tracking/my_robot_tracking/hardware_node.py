@@ -23,6 +23,9 @@ class HardwareNode(Node):
         self.declare_parameter('auto_mode_topic', '/auto/cmd_vel')
         self.declare_parameter('manual_mode_topic', '/manual/cmd_vel')
         
+        # Track last sent commands to avoid spam
+        self.last_sent_pwms = [1500, 1500, 1500, 1500]
+        
         # Get parameters
         self.serial_port = self.get_parameter('serial_port').value
         self.serial_baud = self.get_parameter('serial_baud').value
@@ -36,9 +39,9 @@ class HardwareNode(Node):
         # Serial communication
         self.serial_lock = threading.Lock()
         self.ser = None
-        self.last_drive_pwms = [1500, 1500, 1500, 1500]
         self.current_steering_angles = [0, 0, 0, 0]
         self.pending_steering = None
+        self.last_steering_sent = [0, 0, 0, 0]
         
         # Initialize serial connection
         self.connect_to_arduino()
@@ -166,6 +169,11 @@ class HardwareNode(Node):
     def send_drive_command(self, speeds):
         """Send drive command to Arduino (from your track.py)"""
         speeds = [int(min(2000, max(1000, round(v)))) for v in speeds]
+        
+        # Only send if values changed
+        if speeds == self.last_sent_pwms:
+            return  # Don't spam Arduino
+        
         cmd = f"D {speeds[0]} {speeds[1]} {speeds[2]} {speeds[3]}\n"
         
         self.get_logger().info(f"[D] {cmd.strip()}")  # Like track.py!
@@ -175,6 +183,7 @@ class HardwareNode(Node):
                 try:
                     self.ser.write(cmd.encode())
                     self.ser.flush()  # Force write immediately
+                    self.last_sent_pwms = speeds[:]  # Store what we sent
                 except serial.SerialException as e:
                     self.get_logger().error(f"Drive command failed: {e}")
                     self.attempt_reconnect()
@@ -182,6 +191,11 @@ class HardwareNode(Node):
     def send_steer_command(self, angles):
         """Send steering command to Arduino (from your track.py)"""
         angles = [int(round(v)) for v in angles]
+        
+        # Only send if values changed
+        if angles == self.last_steering_sent:
+            return True  # Already sent this command
+        
         cmd = f"S {angles[0]} {angles[1]} {angles[2]} {angles[3]}\n"
         
         self.get_logger().info(f"[S] {cmd.strip()}")  # Like track.py!
@@ -191,6 +205,7 @@ class HardwareNode(Node):
                 try:
                     self.ser.write(cmd.encode())
                     self.ser.flush()  # Force write immediately
+                    self.last_steering_sent = angles[:]  # Store what we sent
                     return True
                 except serial.SerialException as e:
                     self.get_logger().error(f"Steer command failed: {e}")
