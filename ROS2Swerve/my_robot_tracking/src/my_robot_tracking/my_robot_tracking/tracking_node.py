@@ -108,6 +108,7 @@ class TrackingNode(Node):
         self.last_sent_angle = None
         self.prev_points = None  # Reset optical flow
         self.prev_gray = None
+        self.lost_frames = 0  # Reset lost frames counter
     
     def image_callback(self, msg):
         """Process incoming camera frames"""
@@ -150,6 +151,9 @@ class TrackingNode(Node):
                     good_new = next_points[status == 1]
                     
                     if len(good_new) >= 5:  # Need minimum points to track
+                        # Reset lost frames counter when tracking succeeds
+                        self.lost_frames = 0
+                        
                         # Update tracking points
                         self.prev_points = good_new.reshape(-1, 1, 2)
                         self.prev_gray = gray.copy()
