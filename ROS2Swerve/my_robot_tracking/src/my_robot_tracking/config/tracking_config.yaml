@@ -18,6 +18,8 @@ tracking_node:
     frame_width: 640
     frame_height: 480
     pwm_change_threshold: 20
+    min_drive_speed: 10
+    stop_while_turning: false
 
 # Hardware interface settings
 hardware_node:

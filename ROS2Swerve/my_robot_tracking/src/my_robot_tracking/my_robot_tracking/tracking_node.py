@@ -25,6 +25,8 @@ class TrackingNode(Node):
         self.declare_parameter('frame_width', 640)
         self.declare_parameter('frame_height', 480)
         self.declare_parameter('pwm_change_threshold', 20)
+        self.declare_parameter('min_drive_speed', 10)
+        self.declare_parameter('stop_while_turning', False)
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -35,6 +37,8 @@ class TrackingNode(Node):
         self.frame_width = self.get_parameter('frame_width').value
         self.frame_height = self.get_parameter('frame_height').value
         self.pwm_change_threshold = self.get_parameter('pwm_change_threshold').value
+        self.min_drive_speed = self.get_parameter('min_drive_speed').value
+        self.stop_while_turning = self.get_parameter('stop_while_turning').value
         
         # Initialize OpenCV bridge
         self.bridge = CvBridge()
@@ -83,6 +87,10 @@ class TrackingNode(Node):
         self.status_timer = self.create_timer(0.1, self.publish_status)
         
         self.get_logger().info('Tracking node started')
+
+    def _now(self):
+        """Return current time in seconds with sub-second precision."""
+        return float(self.get_clock().now().nanoseconds()) / 1e9
     
     def select_point_callback(self, msg):
         """Handle point selection from object selector GUI"""
@@ -211,26 +219,30 @@ class TrackingNode(Node):
         
         # Send steering command if angle changed significantly
         if target_angle is not None:
-            angle_diff = abs(self.shortest_angle_diff(target_angle, self.last_sent_angle)) if self.last_sent_angle is not None else 999
+            angle_diff = abs(self.shortest_angle_diff(
+                target_angle,
+                self.last_sent_angle
+            )) if self.last_sent_angle is not None else float('inf')
             
             # Send steering only if angle changed by threshold
             ANGLE_SEND_THRESHOLD = self.angle_send_threshold
             if angle_diff > ANGLE_SEND_THRESHOLD:
                 self.send_steering_command(target_angle)
                 self.last_sent_angle = target_angle
-                self.last_steer_command_time = self.get_clock().now().seconds_nanoseconds()[0] / 1e9
+                self.last_steer_command_time = self._now()
                 self.steering_ready = False
-                # Stop wheels while turning
-                self.stop_robot()
-                self.last_center = (cx, cy)
-                return
+                if self.stop_while_turning:
+                    # Stop wheels while turning (matches legacy behaviour)
+                    self.stop_robot()
+                    self.last_center = (cx, cy)
+                    return
         
         # Wait for steppers to reach position
         if not self.steering_ready:
-            current_time = self.get_clock().now().seconds_nanoseconds()[0] / 1e9
+            current_time = self._now()
             if current_time - self.last_steer_command_time >= self.steering_delay:
                 self.steering_ready = True
-            else:
+            elif self.stop_while_turning:
                 # Still waiting for steppers to turn
                 self.last_center = (cx, cy)
                 return
@@ -245,6 +257,9 @@ class TrackingNode(Node):
         # Drive forward proportional to distance from center (EXACTLY like track.py)
         speed_factor = min(vector_mag / self.max_distance, 1.0)  # 0.0 to 1.0
         drive_speed = int(round(speed_factor * self.max_speed))
+        
+        if drive_speed > 0 and self.min_drive_speed > 0:
+            drive_speed = max(self.min_drive_speed, drive_speed)
         
         # Send movement command
         self.send_movement_command(drive_speed)
