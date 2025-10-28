@@ -82,6 +82,7 @@ class HardwareNode(Node):
                     raise FileNotFoundError("No serial devices matching /dev/ttyACM* or /dev/ttyUSB* found")
                 port = candidates[0]
                 self.get_logger().info(f"Auto-detected serial port: {port}")
+                self.get_logger().info(f"Available ports: {candidates}")
             
             # Try to close the port if it's locked
             try:
