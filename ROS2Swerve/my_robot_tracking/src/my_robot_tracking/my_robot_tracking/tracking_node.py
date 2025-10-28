@@ -147,7 +147,7 @@ class TrackingNode(Node):
                     status = status.reshape(-1)
                     good_new = next_points[status == 1]
                     
-                    if len(good_new) > 0:
+                    if len(good_new) >= 5:  # Need minimum points to track
                         # Update tracking points
                         self.prev_points = good_new.reshape(-1, 1, 2)
                         self.prev_gray = gray.copy()
@@ -166,8 +166,13 @@ class TrackingNode(Node):
                         # Process movement
                         self.process_movement((cx, cy))
                     else:
-                        self.get_logger().warn("Lost tracking points")
-                        self.stop_robot()
+                        self.get_logger().warn(f"Lost tracking points (only {len(good_new)} left)")
+                        # Don't stop immediately, keep trying with fewer points
+                        if len(good_new) > 0:
+                            self.prev_points = good_new.reshape(-1, 1, 2)
+                        else:
+                            self.prev_points = None
+                            self.stop_robot()
             else:
                 self.prev_gray = gray.copy()
                 
