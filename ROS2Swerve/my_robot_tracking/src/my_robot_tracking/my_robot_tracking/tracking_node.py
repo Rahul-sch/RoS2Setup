@@ -10,7 +10,7 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import math
-import threading
+import time as time_module
 
 class TrackingNode(Node):
     def __init__(self):
@@ -92,7 +92,7 @@ class TrackingNode(Node):
 
     def _now(self):
         """Return current time in seconds with sub-second precision."""
-        return float(self.get_clock().now().nanoseconds()) / 1e9
+        return time_module.time()
     
     def select_point_callback(self, msg):
         """Handle point selection from object selector GUI"""
