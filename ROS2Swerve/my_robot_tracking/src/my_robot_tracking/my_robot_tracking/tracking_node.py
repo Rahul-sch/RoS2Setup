@@ -177,7 +177,9 @@ class TrackingNode(Node):
                 self.prev_gray = gray.copy()
                 
         except Exception as e:
+            import traceback
             self.get_logger().error(f"Image processing error: {e}")
+            self.get_logger().error(f"Traceback: {traceback.format_exc()}")
     
     def process_movement(self, center):
         """Process robot movement based on object position"""
