@@ -62,7 +62,9 @@ class TrackingNode(Node):
         )
         self.prev_gray = None
         self.prev_points = None
-        self.angle_alpha = 0.3  # Smoothing factor
+        self.lost_frames = 0
+        self.REACQUIRE_INTERVAL = 10
+        self.REACQUIRE_RADIUS = 20
         
         # Create subscribers and publishers
         self.image_subscription = self.create_subscription(
@@ -166,8 +168,28 @@ class TrackingNode(Node):
                         # Process movement
                         self.process_movement((cx, cy))
                     else:
-                        self.get_logger().warn(f"Lost tracking points (only {len(good_new)} left)")
-                        # Don't stop immediately, keep trying with fewer points
+                        self.lost_frames += 1
+                        self.get_logger().warn(f"Lost tracking points (only {len(good_new)} left), lost_frames: {self.lost_frames}")
+                        
+                        # Try to reacquire features like track.py
+                        if self.lost_frames >= self.REACQUIRE_INTERVAL and self.last_center is not None:
+                            x, y = self.last_center
+                            expansion = self.REACQUIRE_RADIUS
+                            x1, y1 = max(0, x - expansion), max(0, y - expansion)
+                            x2, y2 = min(gray.shape[1] - 1, x + expansion), min(gray.shape[0] - 1, y + expansion)
+                            mask = np.zeros_like(gray)
+                            cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+                            new_features = cv2.goodFeaturesToTrack(
+                                gray, mask=mask, maxCorners=40, qualityLevel=0.15, minDistance=5, blockSize=10
+                            )
+                            if new_features is not None:
+                                self.get_logger().info(f"Reacquired {len(new_features)} features")
+                                self.prev_points = new_features
+                                self.prev_gray = gray.copy()
+                                self.lost_frames = 0
+                                return
+                        
+                        # Keep trying with fewer points
                         if len(good_new) > 0:
                             self.prev_points = good_new.reshape(-1, 1, 2)
                         else:
