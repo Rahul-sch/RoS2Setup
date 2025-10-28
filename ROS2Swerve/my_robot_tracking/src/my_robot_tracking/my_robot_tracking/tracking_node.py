@@ -256,7 +256,7 @@ class TrackingNode(Node):
         steering_msg = Float64MultiArray()
         steering_msg.data = [float(angle), float(angle), float(angle), float(angle)]
         self.steering_publisher.publish(steering_msg)
-        self.get_logger().debug(f"Steering to angle: {angle:.1f}°")
+        self.get_logger().info(f"[STEERING] Publishing angle: {angle:.1f}°")  # Changed to INFO
     
     def send_movement_command(self, speed):
         """Send movement command as Twist message"""
