@@ -161,14 +161,14 @@ class TrackingNode(Node):
                     self.stop_robot()
                     return
                     
-                # Track.py error and motion filtering
-                avg_err = np.mean(good_err)
-                motion_mag = np.mean(np.linalg.norm(good_new - good_old, axis=1))
-                if avg_err > 25.0 or motion_mag > 40.0:
-                    self.get_logger().warn(f"[OCCLUDED] AvgErr={avg_err:.1f}, Motion={motion_mag:.1f} → freeze")
-                    self.stop_robot()
-                    self.lost_frames += 1
-                    return
+                # Track.py error and motion filtering - DISABLED (too aggressive)
+                # avg_err = np.mean(good_err)
+                # motion_mag = np.mean(np.linalg.norm(good_new - good_old, axis=1))
+                # if avg_err > 25.0 or motion_mag > 40.0:
+                #     self.get_logger().warn(f"[OCCLUDED] AvgErr={avg_err:.1f}, Motion={motion_mag:.1f} → freeze")
+                #     self.stop_robot()
+                #     self.lost_frames += 1
+                #     return
                     
                 # Use only reliable points (like track.py)
                 reliable_mask = good_err < 25.0
