@@ -84,13 +84,13 @@ class HardwareNode(Node):
                 self.get_logger().info(f"Auto-detected serial port: {port}")
                 self.get_logger().info(f"Available ports: {candidates}")
             
-            # Try to close the port if it's locked
+            # Kill any processes using the port
+            import subprocess
             try:
-                temp_ser = serial.Serial(port, timeout=0.1)
-                temp_ser.close()
-                time.sleep(0.1)
+                subprocess.run(['sudo', 'fuser', '-k', port], check=False)
+                time.sleep(0.5)
             except:
-                pass  # Port might not exist yet, that's ok
+                pass
             
             self.ser = serial.Serial(
                 port,
