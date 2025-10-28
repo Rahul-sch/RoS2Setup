@@ -48,6 +48,7 @@ class TrackingNode(Node):
         self.last_sent_angle = None
         self.last_steer_command_time = 0.0
         self.last_drive_speed = 0
+        self.angle_alpha = 0.3  # Smoothing factor for angle (from track.py)
         
         # Optical flow parameters
         self.lk_params = dict(
@@ -166,7 +167,7 @@ class TrackingNode(Node):
             self.get_logger().error(f"Image processing error: {e}")
     
     def process_movement(self, center):
-        """Process robot movement based on object position (from your moveRobot function)"""
+        """Process robot movement based on object position"""
         cx, cy = center
         
         # Initialize on first call
@@ -177,51 +178,72 @@ class TrackingNode(Node):
                 self.get_logger().info("Tracking started - will follow object")
             return
         
-        # Calculate displacement from original center
+        # Calculate displacement from original center (EXACTLY like track.py)
         dx = cx - self.original_center[0]
         dy = cy - self.original_center[1]
-        distance = math.hypot(dx, dy)
+        vector_mag = math.hypot(dx, dy)
         
-        # Stop if too close to center
-        if distance < self.center_threshold:
+        # Don't calculate angle if object is within CENTER_THRESHOLD pixels
+        CENTER_THRESHOLD = self.center_threshold
+        if vector_mag < CENTER_THRESHOLD:
+            # Keep current steering, don't send new commands
+            self.last_center = (cx, cy)
+            return
+        
+        # Calculate raw angle only when object has moved away from center
+        raw_angle = None
+        if vector_mag > CENTER_THRESHOLD:
+            raw_angle = (math.degrees(math.atan2(-dx, dy)) + 360.0) % 360.0
+        
+        # Smooth angle to reduce jitter (EXACTLY like track.py)
+        if raw_angle is not None:
+            if self.smoothed_angle is None:
+                self.smoothed_angle = raw_angle
+            else:
+                # Handle angle wrapping (e.g., 359° -> 1°)
+                angle_diff = self.shortest_angle_diff(raw_angle, self.smoothed_angle)
+                self.smoothed_angle = (self.smoothed_angle + self.angle_alpha * angle_diff) % 360.0
+            target_angle = self.smoothed_angle
+        elif self.last_sent_angle is not None:
+            target_angle = self.last_sent_angle
+        else:
+            target_angle = None
+        
+        # Send steering command if angle changed significantly
+        if target_angle is not None:
+            angle_diff = abs(self.shortest_angle_diff(target_angle, self.last_sent_angle)) if self.last_sent_angle is not None else 999
+            
+            # Send steering only if angle changed by threshold
+            ANGLE_SEND_THRESHOLD = self.angle_send_threshold
+            if angle_diff > ANGLE_SEND_THRESHOLD:
+                self.send_steering_command(target_angle)
+                self.last_sent_angle = target_angle
+                self.last_steer_command_time = self.get_clock().now().seconds_nanoseconds()[0] / 1e9
+                self.steering_ready = False
+                # Stop wheels while turning
+                self.stop_robot()
+                self.last_center = (cx, cy)
+                return
+        
+        # Wait for steppers to reach position
+        if not self.steering_ready:
+            current_time = self.get_clock().now().seconds_nanoseconds()[0] / 1e9
+            if current_time - self.last_steer_command_time >= self.steering_delay:
+                self.steering_ready = True
+            else:
+                # Still waiting for steppers to turn
+                self.last_center = (cx, cy)
+                return
+        
+        # Stop if object is at center (within deadzone) - EXACTLY like track.py
+        SIDE_LATERAL_DEADZONE = self.center_threshold
+        if vector_mag < SIDE_LATERAL_DEADZONE:
             self.stop_robot()
             self.last_center = (cx, cy)
             return
         
-        # Calculate angle to object
-        raw_angle = (math.degrees(math.atan2(-dx, dy)) + 360.0) % 360.0
-        
-        # Smooth angle to reduce jitter
-        if self.smoothed_angle is None:
-            self.smoothed_angle = raw_angle
-        else:
-            angle_diff = self.shortest_angle_diff(raw_angle, self.smoothed_angle)
-            self.smoothed_angle = (self.smoothed_angle + self.angle_alpha * angle_diff) % 360.0
-        
-        # Check if we need to update steering
-        if self.last_sent_angle is not None:
-            angle_diff = abs(self.shortest_angle_diff(self.smoothed_angle, self.last_sent_angle))
-            if angle_diff > self.angle_send_threshold:
-                # Send steering command
-                self.send_steering_command(self.smoothed_angle)
-                self.last_sent_angle = self.smoothed_angle
-                self.last_steer_command_time = self.get_clock().now().seconds_nanoseconds()[0]
-                self.steering_ready = False
-                self.stop_robot()  # Stop while turning
-                self.last_center = (cx, cy)
-                return
-        
-        # Wait for steering to complete
-        if not self.steering_ready:
-            current_time = self.get_clock().now().seconds_nanoseconds()[0]
-            if current_time - self.last_steer_command_time >= self.steering_delay:
-                self.steering_ready = True
-            else:
-                self.last_center = (cx, cy)
-                return
-        
-        # Calculate speed based on distance
-        speed_factor = min(distance / self.max_distance, 1.0)
+        # Drive forward proportional to distance from center (EXACTLY like track.py)
+        speed_factor = min(vector_mag / self.max_distance, 1.0)  # 0.0 to 1.0
         drive_speed = int(round(speed_factor * self.max_speed))
         
         # Send movement command
