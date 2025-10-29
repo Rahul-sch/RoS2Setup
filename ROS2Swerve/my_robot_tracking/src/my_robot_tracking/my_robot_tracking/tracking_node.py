@@ -57,6 +57,8 @@ class TrackingNode(Node):
         self.last_drive_speed = 0
         self.angle_alpha = 0.3  # Smoothing factor for angle (from track.py)
         self.current_drive_direction = 1  # 1 = forward, -1 = backward
+        self.drive_engaged = False
+        self.alignment_hold_until = 0.0
         
         # Optical flow parameters
         self.lk_params = dict(
@@ -114,6 +116,8 @@ class TrackingNode(Node):
         self.prev_points = None  # Reset optical flow
         self.prev_gray = None
         self.lost_frames = 0  # Reset lost frames counter
+        self.drive_engaged = False
+        self.alignment_hold_until = 0.0
     
     def image_callback(self, msg):
         """Process incoming camera frames"""
@@ -304,6 +308,8 @@ class TrackingNode(Node):
                     self.last_sent_angle = steer_angle
                     self.last_steer_command_time = self._now()
                     self.steering_ready = False
+                    self.drive_engaged = False
+                    self.alignment_hold_until = self.last_steer_command_time + self.steering_delay
                     if self.stop_while_turning:
                         # Stop wheels while turning (matches legacy behaviour)
                         self.stop_robot()
@@ -320,6 +326,16 @@ class TrackingNode(Node):
                 self.steering_ready = True
             elif self.stop_while_turning:
                 # Still waiting for steppers to turn
+                self.last_center = (cx, cy)
+                return
+        
+        # Require a brief hold after alignment before engaging drive
+        if not self.drive_engaged:
+            current_time = self._now()
+            if self.steering_ready and current_time >= self.alignment_hold_until:
+                self.drive_engaged = True
+            else:
+                self.stop_robot()
                 self.last_center = (cx, cy)
                 return
         
@@ -376,6 +392,7 @@ class TrackingNode(Node):
         twist = Twist()
         self.cmd_vel_publisher.publish(twist)
         self.last_drive_speed = 0
+        self.drive_engaged = False
         self.get_logger().info("[AUTO] Drive stop command")
     
     def shortest_angle_diff(self, a, b):
@@ -394,6 +411,8 @@ class TrackingNode(Node):
             self.steering_ready = True
             self.last_sent_angle = None
             self.current_drive_direction = 1
+            self.drive_engaged = False
+            self.alignment_hold_until = 0.0
             response.success = True
             response.message = "Tracking started"
         else:
@@ -402,6 +421,7 @@ class TrackingNode(Node):
             self.angle_offset = None
             self.current_drive_direction = 1
             self.stop_robot()
+            self.alignment_hold_until = 0.0
             response.success = True
             response.message = "Tracking stopped"
         return response
