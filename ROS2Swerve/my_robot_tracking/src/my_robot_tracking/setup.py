@@ -30,6 +30,7 @@ setup(
             'hardware_node = my_robot_tracking.hardware_node:main',
             'teleop_node = my_robot_tracking.teleop_node:main',
             'object_selector = my_robot_tracking.scripts.object_selector:main',
+            'lidar_guard = my_robot_tracking.lidar_guard_node:main',
         ],
     },
 )

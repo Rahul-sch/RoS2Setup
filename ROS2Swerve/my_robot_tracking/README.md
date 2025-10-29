@@ -12,6 +12,7 @@ my_robot_tracking/
 │   ├── tracking_node.py        # Object tracking (from track.py auto_tracking_loop)
 │   ├── hardware_node.py        # Arduino communication (from track.py serial code)
 │   ├── teleop_node.py          # Xbox controller (from track.py controller_loop)
+│   ├── lidar_guard_node.py     # LIDAR safety monitor (stop/caution zones)
 │   ├── launch/
 │   │   └── tracking_system.launch.py
 │   ├── config/
@@ -44,6 +45,7 @@ my_robot_tracking/
 - **Purpose**: Communicates with Arduino
 - **Input**: `/cmd_vel`
 - **Output**: Serial commands to Arduino
+- **Safety**: Listens to `/safety/stop` and `/safety/caution` to halt/limit motion
 - **From**: `track.py` serial communication code
 
 ### 4. Teleop Node (`teleop_node.py`)
@@ -52,6 +54,13 @@ my_robot_tracking/
 - **Input**: `/joy` (sensor_msgs/Joy)
 - **Output**: `/cmd_vel` (geometry_msgs/Twist)
 - **From**: `track.py` controller_loop thread
+
+### 5. LIDAR Guard Node (`lidar_guard_node.py`)
+
+- **Purpose**: Monitors Slamtec C1 scans for close obstacles
+- **Input**: `/scan` (sensor_msgs/LaserScan)
+- **Output**: `/safety/stop`, `/safety/caution`, `/safety/min_distance`
+- **Behaviour**: Forces hardware node to stop or slow when people/equipment enter safety zones
 
 ## Installation
 
@@ -101,6 +110,20 @@ ros2 run my_robot_tracking teleop_node
 ros2 run my_robot_tracking object_selector.py
 ```
 
+### LIDAR Safety Guard:
+
+> The driver for the Slamtec C1 is not included here. Install and launch `sllidar_ros2` (or `rplidar_ros`) so that a `sensor_msgs/LaserScan` topic is available (e.g. `/scan`).
+
+```bash
+# Once the driver publishes /scan:
+ros2 run my_robot_tracking lidar_guard --ros-args \
+  -p scan_topic:=/scan \
+  -p stop_distance:=0.45 \
+  -p caution_distance:=1.2
+```
+
+When enabled, the guard node publishes `/safety/stop`. The hardware node subscribes to this topic and immediately sends neutral PWMs to the Arduino whenever the stop flag is true.
+
 ## Configuration
 
 Edit `config/tracking_config.yaml` to adjust:
@@ -109,6 +132,7 @@ Edit `config/tracking_config.yaml` to adjust:
 - Tracking parameters (speed, thresholds)
 - Serial port settings
 - Controller deadzone
+- LIDAR stop/caution radii and topics
 
 ## Topics
 
@@ -118,6 +142,9 @@ Edit `config/tracking_config.yaml` to adjust:
 | `/cmd_vel`         | geometry_msgs/Twist | Movement commands |
 | `/joy`             | sensor_msgs/Joy     | Controller input  |
 | `/tracking/active` | std_msgs/Bool       | Tracking status   |
+| `/safety/stop`     | std_msgs/Bool       | True while LIDAR stop zone is violated |
+| `/safety/caution`  | std_msgs/Bool       | True while LIDAR caution zone is violated |
+| `/safety/min_distance` | std_msgs/Float32 | Closest obstacle distance (optional) |
 
 ## Services
 

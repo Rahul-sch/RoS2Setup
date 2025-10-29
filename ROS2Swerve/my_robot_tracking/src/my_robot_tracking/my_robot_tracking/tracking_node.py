@@ -26,7 +26,8 @@ class TrackingNode(Node):
         self.declare_parameter('frame_height', 480)
         self.declare_parameter('pwm_change_threshold', 20)
         self.declare_parameter('min_drive_speed', 10)
-        self.declare_parameter('stop_while_turning', False)
+        self.declare_parameter('lateral_deadzone', 15.0)
+        self.declare_parameter('stop_while_turning', True)
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -38,6 +39,7 @@ class TrackingNode(Node):
         self.frame_height = self.get_parameter('frame_height').value
         self.pwm_change_threshold = self.get_parameter('pwm_change_threshold').value
         self.min_drive_speed = self.get_parameter('min_drive_speed').value
+        self.lateral_deadzone = self.get_parameter('lateral_deadzone').value
         self.stop_while_turning = self.get_parameter('stop_while_turning').value
         
         # Initialize OpenCV bridge
@@ -48,11 +50,13 @@ class TrackingNode(Node):
         self.original_center = None
         self.last_center = None
         self.smoothed_angle = None
+        self.angle_offset = None
         self.steering_ready = True
         self.last_sent_angle = None
         self.last_steer_command_time = 0.0
         self.last_drive_speed = 0
         self.angle_alpha = 0.3  # Smoothing factor for angle (from track.py)
+        self.current_drive_direction = 1  # 1 = forward, -1 = backward
         
         # Optical flow parameters
         self.lk_params = dict(
@@ -77,7 +81,6 @@ class TrackingNode(Node):
         self.tracking_center_publisher = self.create_publisher(Point, '/tracking/center', 10)
         
         # Create services
-        from std_srvs.srv import SetBool
         self.tracking_service = self.create_service(
             SetBool, '/tracking/toggle', self.toggle_tracking_callback)
         
@@ -104,8 +107,10 @@ class TrackingNode(Node):
         self.original_center = (x, y)
         self.last_center = None
         self.smoothed_angle = None
+        self.angle_offset = None
         self.steering_ready = True
         self.last_sent_angle = None
+        self.current_drive_direction = 1
         self.prev_points = None  # Reset optical flow
         self.prev_gray = None
         self.lost_frames = 0  # Reset lost frames counter
@@ -147,8 +152,7 @@ class TrackingNode(Node):
                 
                 if next_points is None or status is None or err is None:
                     self.tracking_active = False
-                    return
-                    
+                    return                    
                 next_points = next_points.reshape(-1, 2)
                 status = status.reshape(-1)
                 err = err.reshape(-1)
@@ -252,8 +256,16 @@ class TrackingNode(Node):
         if vector_mag > CENTER_THRESHOLD:
             raw_angle = (math.degrees(math.atan2(-dx, dy)) + 360.0) % 360.0
         
-        # Smooth angle to reduce jitter (EXACTLY like track.py)
+        steer_angle = None
         if raw_angle is not None:
+            # Set zero reference on first measurement
+            if self.angle_offset is None:
+                self.angle_offset = raw_angle
+
+            # Normalize angle relative to zero reference
+            raw_angle = (raw_angle - self.angle_offset) % 360.0
+
+            # Smooth angle to reduce jitter (EXACTLY like track.py)
             if self.smoothed_angle is None:
                 self.smoothed_angle = raw_angle
             else:
@@ -261,29 +273,44 @@ class TrackingNode(Node):
                 angle_diff = self.shortest_angle_diff(raw_angle, self.smoothed_angle)
                 self.smoothed_angle = (self.smoothed_angle + self.angle_alpha * angle_diff) % 360.0
             target_angle = self.smoothed_angle
+
+            # Choose the steering orientation that minimises wheel rotation
+            steer_angle = target_angle
+            drive_direction = 1
+            if self.last_sent_angle is not None:
+                normal_diff = abs(self.shortest_angle_diff(target_angle, self.last_sent_angle))
+                flipped_angle = (target_angle + 180.0) % 360.0
+                flipped_diff = abs(self.shortest_angle_diff(flipped_angle, self.last_sent_angle))
+                if flipped_diff + 1e-6 < normal_diff:
+                    steer_angle = flipped_angle
+                    drive_direction = -1
+            self.current_drive_direction = drive_direction
         elif self.last_sent_angle is not None:
-            target_angle = self.last_sent_angle
+            steer_angle = self.last_sent_angle
         else:
-            target_angle = None
+            steer_angle = None
         
         # Send steering command if angle changed significantly
-        if target_angle is not None:
+        if steer_angle is not None:
             angle_diff = abs(self.shortest_angle_diff(
-                target_angle,
+                steer_angle,
                 self.last_sent_angle
             )) if self.last_sent_angle is not None else float('inf')
             
             # Send steering only if angle changed by threshold
             ANGLE_SEND_THRESHOLD = self.angle_send_threshold
             if angle_diff > ANGLE_SEND_THRESHOLD:
-                self.send_steering_command(target_angle)
-                self.last_sent_angle = target_angle
-                self.last_steer_command_time = self._now()
-                self.steering_ready = False
-                if self.stop_while_turning:
-                    # Stop wheels while turning (matches legacy behaviour)
-                    self.stop_robot()
-                    self.last_center = (cx, cy)
+                if self.send_steering_command(steer_angle):
+                    self.last_sent_angle = steer_angle
+                    self.last_steer_command_time = self._now()
+                    self.steering_ready = False
+                    if self.stop_while_turning:
+                        # Stop wheels while turning (matches legacy behaviour)
+                        self.stop_robot()
+                        self.last_center = (cx, cy)
+                        return
+                else:
+                    # Failed to send steering; do not proceed with drive logic this cycle
                     return
         
         # Wait for steppers to reach position
@@ -297,7 +324,7 @@ class TrackingNode(Node):
                 return
         
         # Stop if object is at center (within deadzone) - EXACTLY like track.py
-        SIDE_LATERAL_DEADZONE = self.center_threshold
+        SIDE_LATERAL_DEADZONE = self.lateral_deadzone
         if vector_mag < SIDE_LATERAL_DEADZONE:
             self.stop_robot()
             self.last_center = (cx, cy)
@@ -310,6 +337,8 @@ class TrackingNode(Node):
         if drive_speed > 0 and self.min_drive_speed > 0:
             drive_speed = max(self.min_drive_speed, drive_speed)
         
+        drive_speed *= self.current_drive_direction
+        
         # Send movement command
         self.send_movement_command(drive_speed)
         self.last_center = (cx, cy)
@@ -321,23 +350,33 @@ class TrackingNode(Node):
         steering_msg.data = [float(angle), float(angle), float(angle), float(angle)]
         self.steering_publisher.publish(steering_msg)
         self.get_logger().info(f"[STEERING] Publishing angle: {angle:.1f}°")  # Changed to INFO
+        return True
     
     def send_movement_command(self, speed):
         """Send movement command as Twist message"""
-        # Only send if speed changed significantly
-        if abs(speed - self.last_drive_speed) >= self.pwm_change_threshold:
+        speed_delta = abs(speed - self.last_drive_speed)
+        if speed != 0 and self.last_drive_speed == 0:
+            send = True
+        elif speed_delta >= self.pwm_change_threshold:
+            send = True
+        else:
+            send = False
+
+        if send:
             twist = Twist()
             twist.linear.x = float(speed)  # Forward/backward speed
             twist.linear.y = 0.0          # Lateral speed (not used in this implementation)
             twist.angular.z = 0.0          # Rotation speed
             self.cmd_vel_publisher.publish(twist)
             self.last_drive_speed = speed
-            self.get_logger().debug(f"Drive speed: {speed}")
+            self.get_logger().info(f"[AUTO] Drive speed command: {speed}")
     
     def stop_robot(self):
         """Stop robot movement"""
         twist = Twist()
         self.cmd_vel_publisher.publish(twist)
+        self.last_drive_speed = 0
+        self.get_logger().info("[AUTO] Drive stop command")
     
     def shortest_angle_diff(self, a, b):
         """Calculate shortest angle difference"""
@@ -351,13 +390,17 @@ class TrackingNode(Node):
             self.original_center = None
             self.last_center = None
             self.smoothed_angle = None
+            self.angle_offset = None
             self.steering_ready = True
             self.last_sent_angle = None
+            self.current_drive_direction = 1
             response.success = True
             response.message = "Tracking started"
         else:
             # Stop tracking
             self.tracking_active = False
+            self.angle_offset = None
+            self.current_drive_direction = 1
             self.stop_robot()
             response.success = True
             response.message = "Tracking stopped"

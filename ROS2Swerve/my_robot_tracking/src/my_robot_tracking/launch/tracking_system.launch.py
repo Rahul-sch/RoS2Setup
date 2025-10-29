@@ -49,6 +49,30 @@ def generate_launch_description():
         description='Enable object selector GUI node'
     )
     
+    lidar_guard_enabled_arg = DeclareLaunchArgument(
+        'lidar_guard_enabled',
+        default_value='false',
+        description='Enable LIDAR safety guard node'
+    )
+    
+    lidar_scan_topic_arg = DeclareLaunchArgument(
+        'lidar_scan_topic',
+        default_value='/scan',
+        description='LaserScan topic published by Slamtec C1 driver'
+    )
+    
+    lidar_stop_distance_arg = DeclareLaunchArgument(
+        'lidar_stop_distance',
+        default_value='0.45',
+        description='Stop radius (meters) for LIDAR guard'
+    )
+    
+    lidar_caution_distance_arg = DeclareLaunchArgument(
+        'lidar_caution_distance',
+        default_value='1.2',
+        description='Caution radius (meters) for LIDAR guard'
+    )
+    
     # Get launch configurations
     use_sim_time = LaunchConfiguration('use_sim_time')
     camera_enabled = LaunchConfiguration('camera_enabled')
@@ -56,6 +80,10 @@ def generate_launch_description():
     hardware_enabled = LaunchConfiguration('hardware_enabled')
     teleop_enabled = LaunchConfiguration('teleop_enabled')
     object_selector_enabled = LaunchConfiguration('object_selector_enabled')
+    lidar_guard_enabled = LaunchConfiguration('lidar_guard_enabled')
+    lidar_scan_topic = LaunchConfiguration('lidar_scan_topic')
+    lidar_stop_distance = LaunchConfiguration('lidar_stop_distance')
+    lidar_caution_distance = LaunchConfiguration('lidar_caution_distance')
     
     # Camera node
     camera_node = Node(
@@ -112,6 +140,21 @@ def generate_launch_description():
         condition=IfCondition(hardware_enabled)
     )
     
+    # LIDAR guard node
+    lidar_guard_node = Node(
+        package='my_robot_tracking',
+        executable='lidar_guard',
+        name='lidar_guard',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'scan_topic': lidar_scan_topic,
+            'stop_distance': lidar_stop_distance,
+            'caution_distance': lidar_caution_distance
+        }],
+        condition=IfCondition(lidar_guard_enabled)
+    )
+    
     # Teleop node
     teleop_node = Node(
         package='my_robot_tracking',
@@ -161,10 +204,15 @@ def generate_launch_description():
         hardware_enabled_arg,
         teleop_enabled_arg,
         object_selector_enabled_arg,
+        lidar_guard_enabled_arg,
+        lidar_scan_topic_arg,
+        lidar_stop_distance_arg,
+        lidar_caution_distance_arg,
         camera_node,
         tracking_node,
         hardware_node,
         teleop_node,
         joy_node,
         object_selector_node,
+        lidar_guard_node,
     ])

@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Bool, Float64MultiArray
 from std_srvs.srv import SetBool
 import math
 
@@ -27,6 +27,7 @@ class TeleopNode(Node):
         self.last_y_press_time = 0.0
         self.manual_target_angle = 0.0
         self.current_manual_angle = None
+        self.tracking_active = False
         
         # Initialize joystick axes
         self.forward_axis = 0.0
@@ -40,6 +41,8 @@ class TeleopNode(Node):
         # Create subscribers and publishers
         self.joy_subscription = self.create_subscription(
             Joy, '/joy', self.joy_callback, 10)
+        self.tracking_status_subscription = self.create_subscription(
+            Bool, '/tracking/active', self.tracking_status_callback, 10)
         
         # Publish to /manual/cmd_vel to avoid conflicts with auto tracking
         self.cmd_vel_publisher = self.create_publisher(Twist, '/manual/cmd_vel', 10)
@@ -61,6 +64,10 @@ class TeleopNode(Node):
         # Y button to toggle mode (button 3 in Joy message)
         if len(msg.buttons) > 3 and msg.buttons[3] == 1:
             if current_time - self.last_y_press_time > 0.5:
+                if self.tracking_active:
+                    self.get_logger().warn("Tracking active - ignoring manual/auto toggle")
+                    self.last_y_press_time = current_time
+                    return
                 self.manual_mode = not self.manual_mode
                 mode = "MANUAL" if self.manual_mode else "AUTO"
                 self.get_logger().info(f"Mode switched to: {mode}")
@@ -149,6 +156,20 @@ class TeleopNode(Node):
         # Send same angle for all 4 wheels - hardware node will apply offsets
         steering_msg.data = [float(self.manual_target_angle)] * 4
         self.steering_publisher.publish(steering_msg)
+    
+    def tracking_status_callback(self, msg: Bool):
+        """Automatically enter auto mode when tracking is active."""
+        self.tracking_active = msg.data
+        if self.tracking_active:
+            if self.manual_mode:
+                self.manual_mode = False
+                self.get_logger().info("Tracking active - switching teleop to AUTO mode")
+        else:
+            if not self.manual_mode:
+                self.manual_mode = True
+                self.get_logger().info("Tracking inactive - returning teleop to MANUAL mode")
+                self.manual_target_angle = 0.0
+                self.current_manual_angle = None
     
     def normalize_axis(self, value, min_val=-1.0, max_val=1.0):
         """Normalize axis value (from your track.py)"""

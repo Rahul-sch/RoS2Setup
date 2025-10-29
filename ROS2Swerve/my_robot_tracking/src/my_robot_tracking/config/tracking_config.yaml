@@ -19,7 +19,8 @@ tracking_node:
     frame_height: 480
     pwm_change_threshold: 20
     min_drive_speed: 10
-    stop_while_turning: false
+    lateral_deadzone: 15.0
+    stop_while_turning: true
 
 # Hardware interface settings
 hardware_node:
@@ -32,6 +33,9 @@ hardware_node:
     steer_offsets: [0, 0, 0, 0]
     auto_mode_topic: "/auto/cmd_vel"
     manual_mode_topic: "/manual/cmd_vel"
+    lidar_stop_topic: "/safety/stop"
+    lidar_caution_topic: "/safety/caution"
+    caution_speed_scale: 0.4
 
 # Teleop settings
 teleop_node:
@@ -46,3 +50,12 @@ joy_node:
     dev: "/dev/input/js0"
     deadzone: 0.3
     autorepeat_rate: 20.0
+
+# LIDAR safety guard
+lidar_guard:
+  ros__parameters:
+    scan_topic: "/scan"
+    stop_distance: 0.45
+    caution_distance: 1.2
+    release_margin: 0.05
+    publish_min_distance: true
