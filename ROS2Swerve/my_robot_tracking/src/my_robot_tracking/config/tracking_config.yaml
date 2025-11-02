@@ -43,6 +43,7 @@ teleop_node:
     max_speed: 100
     deadzone: 0.18
     max_angular: 1.0
+    steering_step: 20.0
 
 # Joy node settings
 joy_node:

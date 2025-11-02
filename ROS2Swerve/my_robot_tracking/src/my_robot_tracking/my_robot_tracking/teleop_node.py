@@ -16,6 +16,7 @@ class TeleopNode(Node):
         self.declare_parameter('max_speed', 100)
         self.declare_parameter('deadzone', 0.18)
         self.declare_parameter('max_angular', 1.0)
+        self.declare_parameter('steering_step', 20.0)
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -24,6 +25,7 @@ class TeleopNode(Node):
         
         # State
         self.manual_mode = True
+        self.steering_step = self.get_parameter('steering_step').value
         self.last_y_press_time = 0.0
         self.manual_target_angle = 0.0
         self.current_manual_angle = None
@@ -98,13 +100,15 @@ class TeleopNode(Node):
             left_trigger_pressed = self.left_trigger > 0.5
             right_trigger_pressed = self.right_trigger > 0.5
             
+            # Step size in degrees – adjust for finer control
+            step = self.steering_step
             if left_trigger_pressed and not self.last_left_trigger:
-                self.manual_target_angle = (self.manual_target_angle - 45) % 360
+                self.manual_target_angle = (self.manual_target_angle - step) % 360
                 self.send_steering_command()
                 self.get_logger().info(f"Steering left to {self.manual_target_angle}°")
             
             if right_trigger_pressed and not self.last_right_trigger:
-                self.manual_target_angle = (self.manual_target_angle + 45) % 360
+                self.manual_target_angle = (self.manual_target_angle + step) % 360
                 self.send_steering_command()
                 self.get_logger().info(f"Steering right to {self.manual_target_angle}°")
             
