@@ -17,15 +17,21 @@ class TeleopNode(Node):
         self.declare_parameter('deadzone', 0.18)
         self.declare_parameter('max_angular', 1.0)
         self.declare_parameter('steering_step', 20.0)
+        # Match track.py composition (allow per-wheel calibration)
+        self.declare_parameter('steer_dir', [1, 1, 1, 1])
+        self.declare_parameter('steer_offsets', [0, 0, 0, 0])
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
         self.deadzone = self.get_parameter('deadzone').value
         self.max_angular = self.get_parameter('max_angular').value
+        self.steering_step = self.get_parameter('steering_step').value
+        # Per-wheel composition params
+        self.steer_dir = self.get_parameter('steer_dir').value
+        self.steer_offsets = self.get_parameter('steer_offsets').value
         
         # State
         self.manual_mode = True
-        self.steering_step = self.get_parameter('steering_step').value
         self.last_y_press_time = 0.0
         self.manual_target_angle = 0.0
         self.current_manual_angle = None
@@ -156,9 +162,15 @@ class TeleopNode(Node):
     
     def send_steering_command(self):
         """Send steering command to hardware node"""
+        base = float(self.manual_target_angle) % 360.0
+        # Compose per-wheel angles locally (like track.py)
+        composed = []
+        base_int = int(round(base)) % 360
+        for i in range(4):
+            ang = (self.steer_dir[i] * base_int + self.steer_offsets[i]) % 360
+            composed.append(float(int(round(ang))))
         steering_msg = Float64MultiArray()
-        # Send same angle for all 4 wheels - hardware node will apply offsets
-        steering_msg.data = [float(self.manual_target_angle)] * 4
+        steering_msg.data = composed
         self.steering_publisher.publish(steering_msg)
     
     def tracking_status_callback(self, msg: Bool):

@@ -199,7 +199,11 @@ class HardwareNode(Node):
                 angles = [int(a) for a in msg.data]
             
             self.pending_steering = angles
-            self.get_logger().info(f"[ROS] Steering request queued: {angles}")
+            # Log with module numbers for easier diagnosis
+            self.get_logger().info(
+                f"[ROS] Steering command: Module[0]={angles[0]}°, "
+                f"Module[1]={angles[1]}°, Module[2]={angles[2]}°, Module[3]={angles[3]}°"
+            )
             self.get_logger().debug(f"Received steering command: {angles}")
     
     def lidar_stop_callback(self, msg: Bool):

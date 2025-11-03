@@ -156,6 +156,8 @@ class LidarGuardNode(Node):
             self.stop_active = True
             self.caution_active = True
             self.publish_flags()
+            self.last_min_distance = None
+            self.get_logger().warn('LIDAR data stale; forcing stop')
 
     def publish_flags(self) -> None:
         stop_msg = Bool()

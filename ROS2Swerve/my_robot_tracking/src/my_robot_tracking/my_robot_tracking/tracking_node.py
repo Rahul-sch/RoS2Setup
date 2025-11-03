@@ -28,6 +28,9 @@ class TrackingNode(Node):
         self.declare_parameter('min_drive_speed', 10)
         self.declare_parameter('lateral_deadzone', 15.0)
         self.declare_parameter('stop_while_turning', True)
+        # Per-wheel steering composition (match track.py behaviour when desired)
+        self.declare_parameter('steer_dir', [1, 1, 1, 1])
+        self.declare_parameter('steer_offsets', [0, 0, 0, 0])
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -41,6 +44,8 @@ class TrackingNode(Node):
         self.min_drive_speed = self.get_parameter('min_drive_speed').value
         self.lateral_deadzone = self.get_parameter('lateral_deadzone').value
         self.stop_while_turning = self.get_parameter('stop_while_turning').value
+        self.steer_dir = self.get_parameter('steer_dir').value
+        self.steer_offsets = self.get_parameter('steer_offsets').value
         
         # Initialize OpenCV bridge
         self.bridge = CvBridge()
@@ -361,11 +366,17 @@ class TrackingNode(Node):
     
     def send_steering_command(self, angle):
         """Send steering command to hardware node"""
-        # Publish raw angle - hardware node will apply per-wheel offsets
+        # Compose per-wheel angles locally (like track.py)
+        base = float(angle) % 360.0
+        composed = []
+        base_int = int(round(base)) % 360
+        for i in range(4):
+            ang = (self.steer_dir[i] * base_int + self.steer_offsets[i]) % 360
+            composed.append(float(int(round(ang))))
         steering_msg = Float64MultiArray()
-        steering_msg.data = [float(angle), float(angle), float(angle), float(angle)]
+        steering_msg.data = composed
         self.steering_publisher.publish(steering_msg)
-        self.get_logger().info(f"[STEERING] Publishing angle: {angle:.1f}°")  # Changed to INFO
+        self.get_logger().info(f"[STEERING] Base {angle:.1f}° → per-wheel {composed}")  # Changed to INFO
         return True
     
     def send_movement_command(self, speed):
