@@ -31,6 +31,8 @@ class TrackingNode(Node):
         # Per-wheel steering composition (match track.py behaviour when desired)
         self.declare_parameter('steer_dir', [1, 1, 1, 1])
         self.declare_parameter('steer_offsets', [0, 0, 0, 0])
+        # Throttle steering updates to reduce hissing
+        self.declare_parameter('min_steer_interval', 0.4)
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -46,6 +48,7 @@ class TrackingNode(Node):
         self.stop_while_turning = self.get_parameter('stop_while_turning').value
         self.steer_dir = self.get_parameter('steer_dir').value
         self.steer_offsets = self.get_parameter('steer_offsets').value
+        self.min_steer_interval = float(self.get_parameter('min_steer_interval').value)
         
         # Initialize OpenCV bridge
         self.bridge = CvBridge()
@@ -308,7 +311,7 @@ class TrackingNode(Node):
             
             # Send steering only if angle changed by threshold
             ANGLE_SEND_THRESHOLD = self.angle_send_threshold
-            if angle_diff > ANGLE_SEND_THRESHOLD:
+            if angle_diff > ANGLE_SEND_THRESHOLD and (self._now() - self.last_steer_command_time) >= self.min_steer_interval:
                 if self.send_steering_command(steer_angle):
                     self.last_sent_angle = steer_angle
                     self.last_steer_command_time = self._now()
