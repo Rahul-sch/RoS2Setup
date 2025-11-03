@@ -27,7 +27,7 @@ class HardwareNode(Node):
         self.declare_parameter('lidar_caution_topic', '/safety/caution')
         self.declare_parameter('caution_speed_scale', 0.4)
         # Retry steering to improve robustness if a module misses a command
-        self.declare_parameter('steering_retries', 2)
+        self.declare_parameter('steering_retries', 0)
         
         # Track last sent commands to avoid redundant writes
         self.last_sent_pwms = None
@@ -201,7 +201,11 @@ class HardwareNode(Node):
             else:
                 # Already composed angles
                 angles = [int(a) for a in msg.data]
-            
+
+            # Skip if identical to current target to avoid hissing/holding noise
+            if self.current_steering_angles == angles:
+                return
+
             self.pending_steering = angles
             self.pending_steering_retries = max(0, self.steering_retries)
             # Log with module numbers for easier diagnosis
