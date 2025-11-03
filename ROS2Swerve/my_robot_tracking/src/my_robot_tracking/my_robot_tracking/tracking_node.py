@@ -33,6 +33,9 @@ class TrackingNode(Node):
         self.declare_parameter('steer_offsets', [0, 0, 0, 0])
         # Throttle steering updates to reduce hissing
         self.declare_parameter('min_steer_interval', 0.4)
+        # Heading lock hysteresis (deg): drive within +/-tolerance; re-steer when >= change_threshold
+        self.declare_parameter('drive_heading_tolerance', 5.0)
+        self.declare_parameter('heading_change_threshold', 6.0)
         
         # Get parameters
         self.max_speed = self.get_parameter('max_speed').value
@@ -49,6 +52,8 @@ class TrackingNode(Node):
         self.steer_dir = self.get_parameter('steer_dir').value
         self.steer_offsets = self.get_parameter('steer_offsets').value
         self.min_steer_interval = float(self.get_parameter('min_steer_interval').value)
+        self.drive_heading_tolerance = float(self.get_parameter('drive_heading_tolerance').value)
+        self.heading_change_threshold = float(self.get_parameter('heading_change_threshold').value)
         
         # Initialize OpenCV bridge
         self.bridge = CvBridge()
@@ -304,28 +309,45 @@ class TrackingNode(Node):
         
         # Send steering command if angle changed significantly
         if steer_angle is not None:
-            angle_diff = abs(self.shortest_angle_diff(
-                steer_angle,
-                self.last_sent_angle
-            )) if self.last_sent_angle is not None else float('inf')
-            
-            # Send steering only if angle changed by threshold
-            ANGLE_SEND_THRESHOLD = self.angle_send_threshold
-            if angle_diff > ANGLE_SEND_THRESHOLD and (self._now() - self.last_steer_command_time) >= self.min_steer_interval:
-                if self.send_steering_command(steer_angle):
-                    self.last_sent_angle = steer_angle
-                    self.last_steer_command_time = self._now()
-                    self.steering_ready = False
-                    self.drive_engaged = False
-                    self.alignment_hold_until = self.last_steer_command_time + self.steering_delay
-                    if self.stop_while_turning:
-                        # Stop wheels while turning (matches legacy behaviour)
-                        self.stop_robot()
-                        self.last_center = (cx, cy)
+            # Hysteresis around last_sent_angle
+            within_lock = False
+            if self.last_sent_angle is not None:
+                diff_to_last = abs(self.shortest_angle_diff(steer_angle, self.last_sent_angle))
+                if diff_to_last <= self.drive_heading_tolerance:
+                    # Treat as aligned; don't re-steer
+                    within_lock = True
+                    steer_angle = self.last_sent_angle
+
+                # Only re-steer when exceeding the change threshold and throttled by time
+                elif diff_to_last >= self.heading_change_threshold and \
+                     (self._now() - self.last_steer_command_time) >= self.min_steer_interval:
+                    if self.send_steering_command(steer_angle):
+                        self.last_sent_angle = steer_angle
+                        self.last_steer_command_time = self._now()
+                        self.steering_ready = False
+                        self.drive_engaged = False
+                        self.alignment_hold_until = self.last_steer_command_time + self.steering_delay
+                        if self.stop_while_turning:
+                            self.stop_robot()
+                            self.last_center = (cx, cy)
+                            return
+                    else:
                         return
-                else:
-                    # Failed to send steering; do not proceed with drive logic this cycle
-                    return
+            else:
+                # First steering command ever
+                if (self._now() - self.last_steer_command_time) >= self.min_steer_interval:
+                    if self.send_steering_command(steer_angle):
+                        self.last_sent_angle = steer_angle
+                        self.last_steer_command_time = self._now()
+                        self.steering_ready = False
+                        self.drive_engaged = False
+                        self.alignment_hold_until = self.last_steer_command_time + self.steering_delay
+                        if self.stop_while_turning:
+                            self.stop_robot()
+                            self.last_center = (cx, cy)
+                            return
+                    else:
+                        return
         
         # Wait for steppers to reach position
         if not self.steering_ready:
@@ -340,7 +362,14 @@ class TrackingNode(Node):
         # Require a brief hold after alignment before engaging drive
         if not self.drive_engaged:
             current_time = self._now()
-            if self.steering_ready and current_time >= self.alignment_hold_until:
+            # Allow drive when either: alignment hold passed OR we're within heading lock window
+            allow_drive = self.steering_ready and current_time >= self.alignment_hold_until
+            if self.last_sent_angle is not None and not allow_drive:
+                # If close enough to last heading, also allow
+                angle_to_last = abs(self.shortest_angle_diff(self.last_sent_angle, steer_angle if steer_angle is not None else self.last_sent_angle))
+                if angle_to_last <= self.drive_heading_tolerance:
+                    allow_drive = True
+            if allow_drive:
                 self.drive_engaged = True
             else:
                 self.stop_robot()
