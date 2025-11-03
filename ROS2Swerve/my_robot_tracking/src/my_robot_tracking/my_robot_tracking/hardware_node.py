@@ -26,6 +26,8 @@ class HardwareNode(Node):
         self.declare_parameter('lidar_stop_topic', '/safety/stop')
         self.declare_parameter('lidar_caution_topic', '/safety/caution')
         self.declare_parameter('caution_speed_scale', 0.4)
+        # Retry steering to improve robustness if a module misses a command
+        self.declare_parameter('steering_retries', 2)
         
         # Track last sent commands to avoid redundant writes
         self.last_sent_pwms = None
@@ -43,12 +45,14 @@ class HardwareNode(Node):
         self.lidar_caution_topic = self.get_parameter('lidar_caution_topic').value
         self.caution_speed_scale = float(self.get_parameter('caution_speed_scale').value)
         self.caution_speed_scale = min(1.0, max(0.05, self.caution_speed_scale))
+        self.steering_retries = int(self.get_parameter('steering_retries').value)
         
         # Serial communication
         self.serial_lock = threading.Lock()
         self.ser = None
         self.current_steering_angles = [0, 0, 0, 0]
         self.pending_steering = None
+        self.pending_steering_retries = 0
         self.last_steering_sent = None
         self.serial_retry_delay = 2.0
         self._reconnect_active = False
@@ -199,6 +203,7 @@ class HardwareNode(Node):
                 angles = [int(a) for a in msg.data]
             
             self.pending_steering = angles
+            self.pending_steering_retries = max(0, self.steering_retries)
             # Log with module numbers for easier diagnosis
             self.get_logger().info(
                 f"[ROS] Steering command: Module[0]={angles[0]}°, "
@@ -378,13 +383,20 @@ class HardwareNode(Node):
             self.connect_to_arduino()
             return
         
-        # Send pending steering commands
+        # Send pending steering commands (with retries)
         if self.pending_steering is not None:
             angles = self.pending_steering
-            if self.send_steer_command(angles):
-                self.get_logger().info(f"[SERIAL] Sent steering command: {angles}")
-                self.current_steering_angles = self.pending_steering
-                self.pending_steering = None
+            force = self.pending_steering_retries > 0
+            if self.send_steer_command(angles, force=force):
+                self.get_logger().info(f"[SERIAL] Sent steering command: {angles} (force={force})")
+                self.current_steering_angles = angles
+                if self.pending_steering_retries > 0:
+                    self.pending_steering_retries -= 1
+                    # keep pending to resend next cycle if retries remain
+                    if self.pending_steering_retries == 0:
+                        self.pending_steering = None
+                else:
+                    self.pending_steering = None
     
     def destroy_node(self):
         """Clean up resources"""
