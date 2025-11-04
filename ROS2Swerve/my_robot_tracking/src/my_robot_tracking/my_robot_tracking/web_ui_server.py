@@ -177,7 +177,8 @@ def get_camera_frame():
         camera_lock = False
         return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
+def main():
+    """Entry point for console_scripts."""
     # Initialize ROS2 in background
     init_ros()
     
@@ -187,3 +188,6 @@ if __name__ == '__main__':
     # Start Flask server (using 8080 to avoid macOS AirPlay conflict on 5000)
     app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
 
+
+if __name__ == '__main__':
+    main()
