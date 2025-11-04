@@ -7,12 +7,13 @@ from std_msgs.msg import Bool, Float64MultiArray
 from sensor_msgs.msg import Image
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
-from threading import Thread
+from threading import Thread, Lock
 import cv2
 from cv_bridge import CvBridge
 import base64
 import time
 import os
+import sys
 
 # Get the directory where this script is located
 package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +27,8 @@ CORS(app)
 ros_node = None
 bridge = CvBridge()
 latest_camera_frame = None
-camera_lock = False
+camera_lock = Lock()  # Thread-safe lock
+ros_initialized = False
 
 class WebUINode(Node):
     def __init__(self):
@@ -55,22 +57,41 @@ class WebUINode(Node):
     def camera_callback(self, msg):
         global latest_camera_frame, camera_lock
         try:
-            if not camera_lock:
-                cv_image = bridge.imgmsg_to_cv2(msg, "bgr8")
-                latest_camera_frame = cv_image
+            if camera_lock.acquire(blocking=False):
+                try:
+                    cv_image = bridge.imgmsg_to_cv2(msg, "bgr8")
+                    latest_camera_frame = cv_image
+                finally:
+                    camera_lock.release()
         except Exception as e:
             self.get_logger().error(f"Camera callback error: {e}")
 
 def init_ros():
-    global ros_node
-    rclpy.init()
-    ros_node = WebUINode()
-    
-    def spin_ros():
-        rclpy.spin(ros_node)
-    
-    ros_thread = Thread(target=spin_ros, daemon=True)
-    ros_thread.start()
+    global ros_node, ros_initialized
+    try:
+        # Try to initialize ROS2 (might already be initialized)
+        try:
+            rclpy.init()
+        except RuntimeError:
+            # ROS2 already initialized, that's fine
+            pass
+        
+        ros_node = WebUINode()
+        ros_initialized = True
+        
+        def spin_ros():
+            try:
+                rclpy.spin(ros_node)
+            except Exception as e:
+                print(f"ROS2 spin error: {e}", file=sys.stderr)
+        
+        ros_thread = Thread(target=spin_ros, daemon=True)
+        ros_thread.start()
+        print("ROS2 initialized successfully", file=sys.stderr)
+    except Exception as e:
+        print(f"Failed to initialize ROS2: {e}", file=sys.stderr)
+        ros_node = None
+        ros_initialized = False
 
 # Flask Routes
 @app.route('/')
@@ -168,23 +189,35 @@ def get_camera_frame():
         return jsonify({'error': 'No camera frame'}), 404
     
     try:
-        camera_lock = True
-        _, buffer = cv2.imencode('.jpg', latest_camera_frame)
-        img_base64 = base64.b64encode(buffer).decode('utf-8')
-        camera_lock = False
+        with camera_lock:
+            _, buffer = cv2.imencode('.jpg', latest_camera_frame)
+            img_base64 = base64.b64encode(buffer).decode('utf-8')
         return jsonify({'frame': f'data:image/jpeg;base64,{img_base64}'})
     except Exception as e:
-        camera_lock = False
         return jsonify({'error': str(e)}), 500
 
 def main():
     """Entry point for console_scripts."""
+    print("Starting MedRa Web UI Server...", file=sys.stderr)
+    print(f"Templates directory: {template_dir}", file=sys.stderr)
+    print(f"Static directory: {static_dir}", file=sys.stderr)
+    
+    # Check if templates exist
+    if not os.path.exists(template_dir):
+        print(f"ERROR: Templates directory not found: {template_dir}", file=sys.stderr)
+        sys.exit(1)
+    
     # Initialize ROS2 in background
+    print("Initializing ROS2...", file=sys.stderr)
     init_ros()
     
     # Give ROS2 time to initialize
-    time.sleep(1)
+    time.sleep(2)
     
+    if not ros_initialized:
+        print("WARNING: ROS2 initialization failed. UI will work but robot control won't function.", file=sys.stderr)
+    
+    print("Starting Flask server on http://0.0.0.0:8080", file=sys.stderr)
     # Start Flask server (using 8080 to avoid macOS AirPlay conflict on 5000)
     app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
 

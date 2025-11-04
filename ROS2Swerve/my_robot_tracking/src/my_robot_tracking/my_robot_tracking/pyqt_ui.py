@@ -2,25 +2,27 @@
 """
 PyQt5 implementation of the MedRa robot UI so it can run without a web browser.
 
-The UI mirrors the existing Flask/HTML layout:
+The UI connects directly to ROS2 topics - no Flask server needed!
+
+The UI includes:
     - Login screen with MedRa branding and Login/Register buttons
     - Dashboard with Manual Mode and Camera entry points plus doctor name
     - Manual control page with directional pad and top-half controls
-    - Camera page showing the tracking feed placeholder and status indicators
-
-All actions call the existing Flask API (default http://localhost:8080) so the
-ROS2 bridge and nodes can remain unchanged.
+    - Camera page showing the tracking feed and status indicators
 """
 
 from __future__ import annotations
 
 import base64
-import os
 import sys
+import threading
 from typing import Callable, Optional
 
-import requests
-from PyQt5.QtCore import Qt, QTimer
+import cv2
+import rclpy
+from cv_bridge import CvBridge
+from geometry_msgs.msg import Twist
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -34,53 +36,91 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from std_msgs.msg import Bool, Float64MultiArray
 
 
-API_BASE_URL = os.getenv("MEDRA_API_URL", "http://localhost:8080").rstrip("/")
+class RobotAPI(Node, QObject):
+    """Direct ROS2 connection - publishes/subscribes to topics."""
+    
+    status_updated = pyqtSignal(dict)  # Signal for status updates
+    camera_frame_updated = pyqtSignal(str)  # Signal for camera frames
+    
+    def __init__(self) -> None:
+        Node.__init__(self, 'pyqt_ui_node')
+        QObject.__init__(self)
+        
+        self.bridge = CvBridge()
+        self.tracking_active = False
+        self.safety_stop = False
+        self.latest_camera_frame = None
+        
+        # Publishers
+        self.manual_cmd_vel_pub = self.create_publisher(Twist, '/manual/cmd_vel', 10)
+        self.manual_steering_pub = self.create_publisher(Float64MultiArray, '/manual/steering_angles', 10)
+        
+        # Subscribers
+        self.tracking_sub = self.create_subscription(Bool, '/tracking/active', self.tracking_callback, 10)
+        self.safety_sub = self.create_subscription(Bool, '/safety/stop', self.safety_callback, 10)
+        self.camera_sub = self.create_subscription(Image, '/camera/image', self.camera_callback, 10)
+        
+        self.get_logger().info('PyQt UI ROS2 node started')
 
-
-class RobotAPI:
-    """Thin wrapper around the Flask endpoints with short timeouts."""
-
-    def __init__(self, base_url: str = API_BASE_URL) -> None:
-        self.base_url = base_url
-
-    def _post(self, route: str, payload: Optional[dict] = None) -> None:
+    def tracking_callback(self, msg: Bool) -> None:
+        self.tracking_active = msg.data
+        self._emit_status()
+    
+    def safety_callback(self, msg: Bool) -> None:
+        self.safety_stop = msg.data
+        self._emit_status()
+    
+    def camera_callback(self, msg: Image) -> None:
         try:
-            requests.post(
-                f"{self.base_url}{route}",
-                json=payload,
-                timeout=0.4,
-            )
-        except requests.RequestException as exc:
-            print(f"[RobotAPI] POST {route} failed:", exc)
-
-    def _get(self, route: str) -> Optional[dict]:
-        try:
-            response = requests.get(f"{self.base_url}{route}", timeout=0.4)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as exc:
-            print(f"[RobotAPI] GET {route} failed:", exc)
-            return None
-
+            cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            self.latest_camera_frame = cv_image
+            # Convert to base64 for QLabel
+            _, buffer = cv2.imencode('.jpg', cv_image)
+            img_base64 = base64.b64encode(buffer).decode('utf-8')
+            self.camera_frame_updated.emit(f'data:image/jpeg;base64,{img_base64}')
+        except Exception as e:
+            self.get_logger().error(f"Camera callback error: {e}")
+    
+    def _emit_status(self) -> None:
+        self.status_updated.emit({
+            'tracking_active': self.tracking_active,
+            'safety_stop': self.safety_stop
+        })
+    
     def move(self, direction: str, speed: int = 50) -> None:
-        self._post("/api/move", {"direction": direction, "speed": speed})
-
+        twist = Twist()
+        if direction == 'up':
+            twist.linear.x = float(speed)
+        elif direction == 'down':
+            twist.linear.x = float(-speed)
+        elif direction == 'left':
+            twist.angular.z = float(speed)
+        elif direction == 'right':
+            twist.angular.z = float(-speed)
+        self.manual_cmd_vel_pub.publish(twist)
+    
     def stop(self) -> None:
-        self._post("/api/stop")
-
+        twist = Twist()  # All zeros
+        self.manual_cmd_vel_pub.publish(twist)
+    
     def control_top_half(self, action: str) -> None:
-        self._post("/api/top_half", {"action": action})
-
+        # TODO: Implement top half control via ROS2 topic
+        self.get_logger().info(f"Top half control: {action}")
+    
     def status(self) -> Optional[dict]:
-        return self._get("/api/status")
-
+        return {
+            'tracking_active': self.tracking_active,
+            'safety_stop': self.safety_stop
+        }
+    
     def camera_frame(self) -> Optional[str]:
-        data = self._get("/api/camera_frame")
-        if not data:
-            return None
-        return data.get("frame")
+        # This is handled via signal now, but keeping for compatibility
+        return None
 
 
 def build_title_label(text: str, size: int) -> QLabel:
@@ -411,22 +451,20 @@ class CameraPage(QWidget):
         outer.addWidget(image_frame)
         self.setLayout(outer)
 
-        # Periodic polling for status/camera frames
-        self.status_timer = QTimer(self)
-        self.status_timer.setInterval(1000)
-        self.status_timer.timeout.connect(self.update_status)
-        self.status_timer.start()
+        # Connect to ROS2 signals (no polling needed!)
+        self.api.status_updated.connect(self.update_status)
+        self.api.camera_frame_updated.connect(self.update_camera_frame)
+        
+        # Initial status update
+        self.update_status()
 
-        self.camera_timer = QTimer(self)
-        self.camera_timer.setInterval(200)
-        self.camera_timer.timeout.connect(self.update_camera)
-        self.camera_timer.start()
-
-    def update_status(self) -> None:
-        data = self.api.status()
+    def update_status(self, data: Optional[dict] = None) -> None:
+        if data is None:
+            data = self.api.status()
+        
         if not data:
             self.status_indicator.setStyleSheet("color: #ff4d4f;")
-            self.status_text.setText("Tracking: Unknown (API offline)")
+            self.status_text.setText("Tracking: Unknown (ROS2 offline)")
             return
 
         active = data.get("tracking_active", False)
@@ -437,8 +475,7 @@ class CameraPage(QWidget):
             text += " — STOPPED"
         self.status_text.setText(text)
 
-    def update_camera(self) -> None:
-        frame = self.api.camera_frame()
+    def update_camera_frame(self, frame: str) -> None:
         if not frame:
             return
 
@@ -449,7 +486,7 @@ class CameraPage(QWidget):
 
         try:
             raw = base64.b64decode(encoded)
-        except base64.binascii.Error as exc:
+        except Exception as exc:
             print("[CameraPage] Failed to decode frame:", exc)
             return
 
@@ -467,8 +504,7 @@ class CameraPage(QWidget):
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        if self.image_label.pixmap():
-            self.update_camera()
+        # The signal will update the camera frame when a new one arrives
 
 
 class MedRaWindow(QWidget):
@@ -597,8 +633,28 @@ class MedRaWindow(QWidget):
 
 
 def main() -> None:
+    # Initialize ROS2
+    try:
+        rclpy.init()
+    except RuntimeError:
+        # ROS2 already initialized, that's fine
+        pass
+    
     app = QApplication(sys.argv)
+    
+    # Create window (this initializes RobotAPI which needs ROS2)
     window = MedRaWindow()
+    
+    # Start ROS2 spinning in a separate thread
+    def spin_ros():
+        try:
+            rclpy.spin(window.api)
+        except Exception as e:
+            print(f"ROS2 spin error: {e}", file=sys.stderr)
+    
+    ros_thread = threading.Thread(target=spin_ros, daemon=True)
+    ros_thread.start()
+    
     window.show()
     sys.exit(app.exec_())
 
