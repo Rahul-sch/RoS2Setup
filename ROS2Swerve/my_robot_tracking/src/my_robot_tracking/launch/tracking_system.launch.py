@@ -72,6 +72,12 @@ def generate_launch_description():
         default_value='1.2',
         description='Caution radius (meters) for LIDAR guard'
     )
+
+    web_ui_enabled_arg = DeclareLaunchArgument(
+        'web_ui_enabled',
+        default_value='true',
+        description='Enable Flask web UI server'
+    )
     
     # Get launch configurations
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -84,6 +90,7 @@ def generate_launch_description():
     lidar_scan_topic = LaunchConfiguration('lidar_scan_topic')
     lidar_stop_distance = LaunchConfiguration('lidar_stop_distance')
     lidar_caution_distance = LaunchConfiguration('lidar_caution_distance')
+    web_ui_enabled = LaunchConfiguration('web_ui_enabled')
     
     # Camera node
     camera_node = Node(
@@ -196,6 +203,15 @@ def generate_launch_description():
         }],
         condition=IfCondition(object_selector_enabled)
     )
+
+    # Flask Web UI server
+    web_ui_node = Node(
+        package='my_robot_tracking',
+        executable='web_ui_server',
+        name='web_ui_server',
+        output='screen',
+        condition=IfCondition(web_ui_enabled)
+    )
     
     return LaunchDescription([
         use_sim_time_arg,
@@ -208,6 +224,7 @@ def generate_launch_description():
         lidar_scan_topic_arg,
         lidar_stop_distance_arg,
         lidar_caution_distance_arg,
+        web_ui_enabled_arg,
         camera_node,
         tracking_node,
         hardware_node,
@@ -215,4 +232,5 @@ def generate_launch_description():
         joy_node,
         object_selector_node,
         lidar_guard_node,
+        web_ui_node,
     ])

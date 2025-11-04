@@ -10,7 +10,14 @@ cd "$SCRIPT_DIR"
 
 # Source ROS2
 source /opt/ros/humble/setup.bash
-source install/setup.bash
+WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
+
+if [ ! -f "$WORKSPACE_ROOT/install/setup.bash" ]; then
+    echo "ERROR: ROS2 workspace not built. Run 'colcon build --symlink-install' from $WORKSPACE_ROOT first."
+    exit 1
+fi
+
+source "$WORKSPACE_ROOT/install/setup.bash"
 
 echo "=========================================="
 echo "MedRa Robot Control System (PyQt UI) - Starting..."
