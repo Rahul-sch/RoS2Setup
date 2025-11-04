@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedRa - Camera</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="camera-page">
+    <div class="camera-header">
+        <button class="back-btn" onclick="window.location.href='/dashboard'">← Back</button>
+        <h2>Camera Tracking</h2>
+        <div class="status-indicator">
+            <span id="tracking-status">●</span>
+            <span id="status-text">Tracking: Inactive</span>
+        </div>
+    </div>
+    
+    <div class="camera-content">
+        <div class="camera-viewport">
+            <img id="camera-feed" src="" alt="Camera Feed">
+            <div class="camera-overlay">
+                <p>Click on the image to select tracking target</p>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='camera.js') }}"></script>
+</body>
+</html>
+

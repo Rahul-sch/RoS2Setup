@@ -1,0 +1,17 @@
+[Unit]
+Description=MedRa Robot UI Kiosk Mode
+After=network.target graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+Environment="DISPLAY=:0"
+WorkingDirectory=/home/YOUR_USERNAME/Ros2Setup/ROS2Swerve/my_robot_tracking
+ExecStart=/bin/bash /home/YOUR_USERNAME/Ros2Setup/ROS2Swerve/my_robot_tracking/start_kiosk_ui.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=graphical.target
+

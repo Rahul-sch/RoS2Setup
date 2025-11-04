@@ -9,14 +9,19 @@ setup(
     version='1.0.0',
     packages=[package_name, package_name + '.scripts'],
     package_dir={'': '.'},
+    package_data={
+        package_name: ['templates/*.html', 'static/*'],
+    },
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'templates'), glob('my_robot_tracking/templates/*.html')),
+        (os.path.join('share', package_name, 'static'), glob('my_robot_tracking/static/*')),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'flask', 'flask-cors'],
     zip_safe=True,
     maintainer='User',
     maintainer_email='user@example.com',
@@ -31,6 +36,7 @@ setup(
             'teleop_node = my_robot_tracking.teleop_node:main',
             'object_selector = my_robot_tracking.scripts.object_selector:main',
             'lidar_guard = my_robot_tracking.lidar_guard_node:main',
+            'web_ui_server = my_robot_tracking.web_ui_server:main',
         ],
     },
 )

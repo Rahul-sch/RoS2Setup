@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedRa - Manual Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="manual-page">
+    <div class="manual-header">
+        <button class="back-btn" onclick="window.location.href='/dashboard'">← Back</button>
+        <h2>Manual Control</h2>
+    </div>
+    
+    <div class="manual-content">
+        <!-- Robot Movement Controls -->
+        <div class="control-section">
+            <h3>Robot Movement</h3>
+            <div class="arrow-grid">
+                <div class="arrow-row">
+                    <button class="arrow-btn" id="btn-up" onmousedown="moveRobot('up')" onmouseup="stopRobot()" ontouchstart="moveRobot('up')" ontouchend="stopRobot()">↑</button>
+                </div>
+                <div class="arrow-row">
+                    <button class="arrow-btn" id="btn-left" onmousedown="moveRobot('left')" onmouseup="stopRobot()" ontouchstart="moveRobot('left')" ontouchend="stopRobot()">←</button>
+                    <button class="arrow-btn" id="btn-right" onmousedown="moveRobot('right')" onmouseup="stopRobot()" ontouchstart="moveRobot('right')" ontouchend="stopRobot()">→</button>
+                </div>
+                <div class="arrow-row">
+                    <button class="arrow-btn" id="btn-down" onmousedown="moveRobot('down')" onmouseup="stopRobot()" ontouchstart="moveRobot('down')" ontouchend="stopRobot()">↓</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Top Half Controls -->
+        <div class="control-section">
+            <h3>Top Half Control</h3>
+            <div class="top-half-controls">
+                <div class="top-half-row">
+                    <div class="top-half-label">
+                        <span>↑</span>
+                        <div class="plus-minus">
+                            <button class="pm-btn" onclick="controlTopHalf('up_plus')">+</button>
+                            <button class="pm-btn" onclick="controlTopHalf('up_minus')">-</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="top-half-buttons">
+                    <button class="top-half-btn" onmousedown="controlTopHalf('up')" onmouseup="stopTopHalf()">↑</button>
+                    <button class="top-half-btn" onmousedown="controlTopHalf('up')" onmouseup="stopTopHalf()">↑</button>
+                </div>
+                <div class="top-half-buttons">
+                    <button class="top-half-btn" onmousedown="controlTopHalf('down')" onmouseup="stopTopHalf()">↓</button>
+                    <button class="top-half-btn" onmousedown="controlTopHalf('down')" onmouseup="stopTopHalf()">↓</button>
+                </div>
+                <div class="top-half-row">
+                    <div class="top-half-label">
+                        <span>↓</span>
+                        <div class="plus-minus">
+                            <button class="pm-btn" onclick="controlTopHalf('down_plus')">+</button>
+                            <button class="pm-btn" onclick="controlTopHalf('down_minus')">-</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='manual.js') }}"></script>
+</body>
+</html>
+

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedRa - Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="dashboard-page">
+    <div class="dashboard-header">
+        <h2 class="doctor-name">{{ doctor_name }}</h2>
+    </div>
+    
+    <div class="dashboard-content">
+        <button class="big-btn big-btn-left" onclick="window.location.href='/manual'">
+            <span class="btn-icon">🎮</span>
+            <span class="btn-text">Manual Mode</span>
+        </button>
+        
+        <button class="big-btn big-btn-right" onclick="window.location.href='/camera'">
+            <span class="btn-icon">📷</span>
+            <span class="btn-text">Camera</span>
+        </button>
+    </div>
+</body>
+</html>
+
