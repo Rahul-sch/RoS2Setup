@@ -238,6 +238,7 @@ class ManualPage(QWidget):
         super().__init__()
         self.api = api
         self.current_direction: Optional[str] = None
+        self.steering_angle = 0.0  # Current steering angle
         self.move_timer = QTimer(self)
         self.move_timer.setInterval(100)
         self.move_timer.timeout.connect(self._send_move_command)
@@ -265,9 +266,11 @@ class ManualPage(QWidget):
         content.setSpacing(40)
 
         movement_card = self._build_movement_card()
+        steering_card = self._build_steering_card()
         top_half_card = self._build_top_half_card()
 
         content.addWidget(movement_card, stretch=1)
+        content.addWidget(steering_card, stretch=1)
         content.addWidget(top_half_card, stretch=1)
 
         outer.addLayout(header)
@@ -289,8 +292,8 @@ class ManualPage(QWidget):
 
         up_btn = self._arrow_button("↑", "up")
         down_btn = self._arrow_button("↓", "down")
-        left_btn = self._arrow_button("←", "left")
-        right_btn = self._arrow_button("→", "right")
+        left_btn = self._arrow_button("↺", "left")  # Rotate left
+        right_btn = self._arrow_button("↻", "right")  # Rotate right
 
         grid.addWidget(up_btn, 0, 1)
         grid.addWidget(left_btn, 1, 0)
@@ -300,6 +303,52 @@ class ManualPage(QWidget):
         layout.addWidget(heading)
         layout.addStretch()
         layout.addLayout(grid)
+        layout.addStretch()
+        return card
+
+    def _build_steering_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("controlCard")
+        layout = QVBoxLayout(card)
+        layout.setSpacing(20)
+
+        heading = QLabel("Wheel Steering")
+        heading.setAlignment(Qt.AlignCenter)
+        heading.setFont(QFont("Arial", 20, QFont.Bold))
+
+        self.steering_label = QLabel(f"Angle: {int(self.steering_angle)}°")
+        self.steering_label.setAlignment(Qt.AlignCenter)
+        self.steering_label.setFont(QFont("Arial", 18, QFont.Bold))
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(20)
+
+        steer_left_btn = QPushButton("⟲ -20°")
+        steer_left_btn.setFont(QFont("Arial", 18, QFont.Bold))
+        steer_left_btn.setFixedSize(120, 80)
+        steer_left_btn.setObjectName("steeringButton")
+        steer_left_btn.clicked.connect(lambda: self.adjust_steering(-20))
+
+        steer_right_btn = QPushButton("⟳ +20°")
+        steer_right_btn.setFont(QFont("Arial", 18, QFont.Bold))
+        steer_right_btn.setFixedSize(120, 80)
+        steer_right_btn.setObjectName("steeringButton")
+        steer_right_btn.clicked.connect(lambda: self.adjust_steering(20))
+
+        reset_btn = QPushButton("Reset 0°")
+        reset_btn.setFont(QFont("Arial", 16, QFont.Bold))
+        reset_btn.setFixedSize(120, 60)
+        reset_btn.setObjectName("steeringResetButton")
+        reset_btn.clicked.connect(lambda: self.set_steering(0))
+
+        btn_row.addWidget(steer_left_btn)
+        btn_row.addWidget(steer_right_btn)
+
+        layout.addWidget(heading)
+        layout.addWidget(self.steering_label)
+        layout.addStretch()
+        layout.addLayout(btn_row)
+        layout.addWidget(reset_btn, alignment=Qt.AlignCenter)
         layout.addStretch()
         return card
 
@@ -389,6 +438,25 @@ class ManualPage(QWidget):
         self.move_timer.stop()
         self.api.stop()
         self.current_direction = None
+
+    def adjust_steering(self, delta: float) -> None:
+        """Adjust steering angle by delta degrees"""
+        self.steering_angle = (self.steering_angle + delta) % 360
+        self.steering_label.setText(f"Angle: {int(self.steering_angle)}°")
+        self.send_steering()
+
+    def set_steering(self, angle: float) -> None:
+        """Set steering to specific angle"""
+        self.steering_angle = angle % 360
+        self.steering_label.setText(f"Angle: {int(self.steering_angle)}°")
+        self.send_steering()
+
+    def send_steering(self) -> None:
+        """Send steering command via ROS2"""
+        msg = Float64MultiArray()
+        msg.data = [float(self.steering_angle)] * 4  # All wheels same angle
+        self.api.manual_steering_pub.publish(msg)
+        self.api.get_logger().info(f"Steering set to {int(self.steering_angle)}°")
 
 
 class CameraPage(QWidget):
@@ -618,6 +686,23 @@ class MedRaWindow(QWidget):
             }
             #statusIndicator {
                 color: #ef4444;
+            }
+            #steeringButton {
+                background: white;
+                border: 4px solid #10b981;
+                border-radius: 18px;
+                color: #10b981;
+            }
+            #steeringButton:pressed {
+                background: #10b981;
+                color: white;
+            }
+            #steeringResetButton {
+                background: #6366f1;
+                border-radius: 14px;
+            }
+            #steeringResetButton:hover {
+                background: #4f46e5;
             }
             """
         )

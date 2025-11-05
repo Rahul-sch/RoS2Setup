@@ -15,7 +15,8 @@ class HardwareNode(Node):
         super().__init__('hardware_node')
         
         # Declare parameters
-        self.declare_parameter('serial_port', '')  # Empty = auto-detect
+        self.declare_parameter('steering_port', '')  # Empty = auto-detect
+        self.declare_parameter('drive_port', '')     # Empty = auto-detect
         self.declare_parameter('serial_baud', 115200)
         self.declare_parameter('max_speed', 100)
         self.declare_parameter('wheel_drive_dir', [1, 1, 1, 1])
@@ -33,7 +34,8 @@ class HardwareNode(Node):
         self.last_sent_pwms = None
         
         # Get parameters
-        self.serial_port = self.get_parameter('serial_port').value
+        self.steering_port = self.get_parameter('steering_port').value
+        self.drive_port = self.get_parameter('drive_port').value
         self.serial_baud = self.get_parameter('serial_baud').value
         self.max_speed = self.get_parameter('max_speed').value
         self.wheel_drive_dir = self.get_parameter('wheel_drive_dir').value
@@ -47,9 +49,10 @@ class HardwareNode(Node):
         self.caution_speed_scale = min(1.0, max(0.05, self.caution_speed_scale))
         self.steering_retries = int(self.get_parameter('steering_retries').value)
         
-        # Serial communication
+        # Serial communication - TWO separate Arduinos
         self.serial_lock = threading.Lock()
-        self.ser = None
+        self.ser_steering = None  # Arduino #1: Steering control
+        self.ser_drive = None     # Arduino #2: Drive control
         self.current_steering_angles = [0, 0, 0, 0]
         self.pending_steering = None
         self.pending_steering_retries = 0
@@ -90,36 +93,95 @@ class HardwareNode(Node):
         self.get_logger().info('Hardware node started')
     
     def connect_to_arduino(self):
-        """Connect to Arduino (from your track.py)"""
+        """Connect to BOTH Arduinos - Steering and Drive"""
         if self._shutdown_requested:
             return False
 
-        # Close existing connection if open
-        if self.ser and self.ser.is_open:
-            self.get_logger().info("Closing existing serial connection...")
+        # Close existing connections if open
+        if self.ser_steering and self.ser_steering.is_open:
+            self.get_logger().info("Closing existing steering connection...")
             try:
-                self.ser.close()
+                self.ser_steering.close()
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+        if self.ser_drive and self.ser_drive.is_open:
+            self.get_logger().info("Closing existing drive connection...")
+            try:
+                self.ser_drive.close()
             except Exception:
                 pass
             time.sleep(0.1)
 
         # Build list of candidate ports
-        if self.serial_port:
-            candidate_ports = [self.serial_port]
-        else:
-            candidate_ports = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
-            if not candidate_ports:
-                self.get_logger().error("No serial devices matching /dev/ttyACM* or /dev/ttyUSB* found")
-                return False
-            self.get_logger().info(f"Available ports: {candidate_ports}")
+        # Check if ports are manually specified
+        manual_steering_port = self.steering_port if self.steering_port else None
+        manual_drive_port = self.drive_port if self.drive_port else None
 
-        last_error = None
+        if manual_steering_port and manual_drive_port:
+            # Both ports manually specified - connect directly
+            self.get_logger().info(f"Using manual port config: steering={manual_steering_port}, drive={manual_drive_port}")
+            try:
+                # Connect to steering Arduino
+                self.ser_steering = serial.Serial(
+                    manual_steering_port, self.serial_baud, timeout=1, write_timeout=2,
+                    rtscts=False, dsrdtr=False, exclusive=True
+                )
+                self.ser_steering.reset_input_buffer()
+                self.ser_steering.reset_output_buffer()
+                time.sleep(0.2)
+                self.get_logger().info(f"✓ Connected to STEERING Arduino on {manual_steering_port}")
+
+                # Connect to drive Arduino
+                self.ser_drive = serial.Serial(
+                    manual_drive_port, self.serial_baud, timeout=1, write_timeout=2,
+                    rtscts=False, dsrdtr=False, exclusive=True
+                )
+                self.ser_drive.reset_input_buffer()
+                self.ser_drive.reset_output_buffer()
+                time.sleep(0.2)
+                self.get_logger().info(f"✓ Connected to DRIVE Arduino on {manual_drive_port}")
+
+                # Initialize both Arduinos
+                self.last_sent_pwms = None
+                self.last_steering_sent = None
+                self.get_logger().info("[Init] Setting wheels to 0°...")
+                self.send_steer_command([0, 0, 0, 0], force=True)
+                time.sleep(0.3)
+                self.get_logger().info("[Init] Calibrating stepper positions...")
+                self.calibrate_steppers()
+                self.get_logger().info("[Init] Stopping drive motors...")
+                self.send_drive_command([1500, 1500, 1500, 1500], force=True)
+                self.get_logger().info("✓ Both Arduinos initialized successfully!")
+                return True
+
+            except Exception as e:
+                self.get_logger().error(f"Failed to connect with manual ports: {e}")
+                return False
+
+        # Auto-detect mode
+        candidate_ports = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+        if not candidate_ports:
+            self.get_logger().error("No serial devices matching /dev/ttyACM* or /dev/ttyUSB* found")
+            return False
+
+        self.get_logger().info(f"Auto-detecting Arduinos from ports: {candidate_ports}")
+
+        # Try to connect to both Arduinos by detecting which is which
+        steering_connected = False
+        drive_connected = False
+
         for port in candidate_ports:
             if self._shutdown_requested:
                 return False
+
+            if steering_connected and drive_connected:
+                break
+
             try:
-                self.get_logger().info(f"Attempting to connect on {port} ...")
-                new_ser = serial.Serial(
+                self.get_logger().info(f"Attempting to connect on {port}...")
+                test_ser = serial.Serial(
                     port,
                     self.serial_baud,
                     timeout=1,
@@ -128,55 +190,90 @@ class HardwareNode(Node):
                     dsrdtr=False,
                     exclusive=True,
                 )
-                new_ser.reset_input_buffer()
-                new_ser.reset_output_buffer()
-                new_ser.setDTR(False)
-                new_ser.setRTS(False)
+                test_ser.reset_input_buffer()
+                test_ser.reset_output_buffer()
+                test_ser.setDTR(False)
+                test_ser.setRTS(False)
                 time.sleep(0.05)
-                new_ser.setDTR(True)
-                new_ser.setRTS(True)
-                time.sleep(0.1)
+                test_ser.setDTR(True)
+                test_ser.setRTS(True)
+                time.sleep(0.5)  # Wait for Arduino startup message
 
-                self.ser = new_ser
-                self.serial_port = port  # remember working port
-                self.get_logger().info(f"Connected to Arduino on {port}")
+                # Read startup message to identify Arduino
+                lines = []
+                while test_ser.in_waiting:
+                    try:
+                        line = test_ser.readline().decode('utf-8', errors='ignore').strip()
+                        if line:
+                            lines.append(line)
+                    except:
+                        pass
 
-                # Reset last sent caches so we always issue the first commands
-                self.last_sent_pwms = None
-                self.last_steering_sent = None
-                
-                # Initialize steppers to 0 degrees
-                self.get_logger().info("[Init] Setting wheels to 0°...")
-                self.send_steer_command([0, 0, 0, 0], force=True)
-                time.sleep(0.3)
-                
-                # Calibrate positions
-                self.get_logger().info("[Init] Calibrating stepper positions...")
-                self.calibrate_steppers()
+                startup_msg = ' '.join(lines).lower()
+                self.get_logger().info(f"Port {port} says: {startup_msg}")
 
-                # Ensure drive motors are stopped
-                self.send_drive_command([1500, 1500, 1500, 1500], force=True)
-                return True
+                # Identify Arduino by its startup message
+                if 'steering' in startup_msg and not steering_connected:
+                    self.ser_steering = test_ser
+                    self.steering_port = port
+                    self.get_logger().info(f"✓ Connected to STEERING Arduino on {port}")
+                    steering_connected = True
+                elif 'drive' in startup_msg and not drive_connected:
+                    self.ser_drive = test_ser
+                    self.drive_port = port
+                    self.get_logger().info(f"✓ Connected to DRIVE Arduino on {port}")
+                    drive_connected = True
+                else:
+                    # Can't identify or already connected to this type
+                    self.get_logger().warn(f"Port {port} - unknown or duplicate Arduino type")
+                    test_ser.close()
+
             except Exception as exc:
-                last_error = exc
                 self.get_logger().warn(f"Port {port} unavailable: {exc}")
                 try:
-                    if 'new_ser' in locals() and new_ser and new_ser.is_open:
-                        new_ser.close()
+                    if 'test_ser' in locals() and test_ser and test_ser.is_open:
+                        test_ser.close()
                 except Exception:
                     pass
                 continue
 
-        self.get_logger().error(f"Could not connect to Arduino: {last_error}")
-        self.get_logger().info("Will retry connection in background...")
-        self.ser = None
-        return False
+        # Check if both connected
+        if not steering_connected:
+            self.get_logger().error("Could not connect to STEERING Arduino!")
+            self.ser_steering = None
+
+        if not drive_connected:
+            self.get_logger().error("Could not connect to DRIVE Arduino!")
+            self.ser_drive = None
+
+        if not (steering_connected and drive_connected):
+            self.get_logger().error("Failed to connect to both Arduinos. Will retry...")
+            return False
+
+        # Reset last sent caches
+        self.last_sent_pwms = None
+        self.last_steering_sent = None
+
+        # Initialize steering Arduino
+        self.get_logger().info("[Init] Setting wheels to 0°...")
+        self.send_steer_command([0, 0, 0, 0], force=True)
+        time.sleep(0.3)
+
+        self.get_logger().info("[Init] Calibrating stepper positions...")
+        self.calibrate_steppers()
+
+        # Initialize drive Arduino
+        self.get_logger().info("[Init] Stopping drive motors...")
+        self.send_drive_command([1500, 1500, 1500, 1500], force=True)
+
+        self.get_logger().info("✓ Both Arduinos initialized successfully!")
+        return True
     
     def calibrate_steppers(self):
         """Calibrate stepper positions (from your track.py)"""
-        if self.ser and self.ser.is_open:
+        if self.ser_steering and self.ser_steering.is_open:
             try:
-                self.ser.write(b"C 0 0\nC 1 0\nC 2 0\nC 3 0\n")
+                self.ser_steering.write(b"C 0 0\nC 1 0\nC 2 0\nC 3 0\n")
                 time.sleep(0.1)
                 self.get_logger().info("Stepper calibration complete")
             except Exception as e:
@@ -245,8 +342,6 @@ class HardwareNode(Node):
     
     def _handle_cmd_vel(self, msg, source):
         """Handle movement commands - unified for auto and manual"""
-        # Convert Twist to wheel speeds
-        # For now, just forward/backward movement
         if self.safety_stop_active:
             # Ignore incoming commands while stop is active
             if self.last_sent_pwms != [1500, 1500, 1500, 1500]:
@@ -254,9 +349,48 @@ class HardwareNode(Node):
                 self.send_drive_command([1500, 1500, 1500, 1500], force=True)
             return
 
-        if abs(msg.linear.x) > 0.1:
-            speed = int(msg.linear.x)
-            # Clamp speed
+        # Extract velocity components
+        vx = msg.linear.x      # Forward/backward
+        vy = msg.linear.y      # Strafe left/right
+        omega = msg.angular.z  # Rotation
+
+        # Check if any movement commanded
+        if abs(vx) < 0.1 and abs(vy) < 0.1 and abs(omega) < 0.1:
+            # Stop all motors
+            if self.last_sent_pwms != [1500, 1500, 1500, 1500]:
+                self.get_logger().info(f"[{source}] Stopping all motors")
+            self.send_drive_command([1500, 1500, 1500, 1500])
+            return
+
+        # For pure rotation, set wheels to X-pattern and rotate
+        if abs(vx) < 0.1 and abs(vy) < 0.1 and abs(omega) > 0.1:
+            # Rotation in place - set wheels to 45° angles for X-pattern
+            angles = [45, 135, 45, 135]  # X-pattern for rotation
+            self.pending_steering = angles
+
+            # All wheels rotate in same direction for in-place rotation
+            speed = int(omega * self.max_speed)
+            speed = max(-self.max_speed, min(self.max_speed, speed))
+
+            if self.caution_active and speed != 0:
+                scaled = int(round(speed * self.caution_speed_scale))
+                if scaled == 0:
+                    scaled = 1 if speed > 0 else -1
+                speed = scaled
+
+            # All wheels same speed for rotation
+            pwms = [1500 + self.wheel_drive_dir[i] * speed for i in range(4)]
+            self.get_logger().info(f"[{source}] Rotation mode: angles={angles}, pwms={pwms}")
+            self.send_drive_command(pwms)
+            return
+
+        # For forward/backward movement
+        if abs(vx) > 0.1:
+            # Point all wheels forward
+            if self.pending_steering != [0, 0, 0, 0]:
+                self.pending_steering = [0, 0, 0, 0]
+
+            speed = int(vx)
             speed = max(-self.max_speed, min(self.max_speed, speed))
 
             if self.caution_active and speed != 0:
@@ -268,36 +402,53 @@ class HardwareNode(Node):
                         f"[{source}] Speed {speed} limited to {scaled} due to LIDAR caution"
                     )
                 speed = scaled
-            
+
             # Convert to PWM values
             pwms = [1500 + self.wheel_drive_dir[i] * speed for i in range(4)]
-            self.get_logger().info(f"[{source}] Sending drive command: {pwms}")
+            self.get_logger().info(f"[{source}] Forward/backward: speed={speed}, pwms={pwms}")
             self.send_drive_command(pwms)
-        else:
-            # Stop
-            if self.last_sent_pwms != [1500, 1500, 1500, 1500]:
-                self.get_logger().info(f"[{source}] Sending drive command: [1500, 1500, 1500, 1500]")
-            self.send_drive_command([1500, 1500, 1500, 1500])
+            return
+
+        # For strafe movement
+        if abs(vy) > 0.1:
+            # Point wheels to 90° for strafing
+            angles = [90, 90, 90, 90]
+            if self.pending_steering != angles:
+                self.pending_steering = angles
+
+            speed = int(vy)
+            speed = max(-self.max_speed, min(self.max_speed, speed))
+
+            if self.caution_active and speed != 0:
+                scaled = int(round(speed * self.caution_speed_scale))
+                if scaled == 0:
+                    scaled = 1 if speed > 0 else -1
+                speed = scaled
+
+            pwms = [1500 + self.wheel_drive_dir[i] * speed for i in range(4)]
+            self.get_logger().info(f"[{source}] Strafe mode: angles={angles}, pwms={pwms}")
+            self.send_drive_command(pwms)
     
     def send_drive_command(self, speeds, force=False):
-        """Send drive command to Arduino (from your track.py)"""
+        """Send drive command to Drive Arduino"""
         speeds = [int(min(2000, max(1000, round(v)))) for v in speeds]
-        
+
         # Only send if values changed (unless forced)
         if not force and self.last_sent_pwms is not None and speeds == self.last_sent_pwms:
             return True  # Command already active
-        
-        cmd = f"D {speeds[0]} {speeds[1]} {speeds[2]} {speeds[3]}\n"
-        
+
+        # arduino_drive.ino expects 'S' command, not 'D'
+        cmd = f"S {speeds[0]} {speeds[1]} {speeds[2]} {speeds[3]}\n"
+
         need_reconnect = False
         with self.serial_lock:
-            if not (self.ser and self.ser.is_open):
+            if not (self.ser_drive and self.ser_drive.is_open):
                 need_reconnect = True
             else:
                 try:
-                    self.ser.write(cmd.encode())
+                    self.ser_drive.write(cmd.encode())
                     self.last_sent_pwms = speeds[:]  # Store what we sent
-                    self.get_logger().info(f"[D] {cmd.strip()}")  # Like track.py!
+                    self.get_logger().info(f"[DRIVE] {cmd.strip()}")
                     return True
                 except serial.SerialTimeoutException as e:
                     self.get_logger().warn(f"Drive command timeout: {e}")
@@ -315,24 +466,24 @@ class HardwareNode(Node):
         return False
     
     def send_steer_command(self, angles, force=False):
-        """Send steering command to Arduino (from your track.py)"""
+        """Send steering command to Steering Arduino"""
         angles = [int(round(v)) for v in angles]
-        
+
         # Only send if values changed (unless forced)
         if not force and self.last_steering_sent is not None and angles == self.last_steering_sent:
             return True  # Already sent this command
-        
+
         cmd = f"S {angles[0]} {angles[1]} {angles[2]} {angles[3]}\n"
-        
+
         need_reconnect = False
         with self.serial_lock:
-            if not (self.ser and self.ser.is_open):
+            if not (self.ser_steering and self.ser_steering.is_open):
                 need_reconnect = True
             else:
                 try:
-                    self.ser.write(cmd.encode())
+                    self.ser_steering.write(cmd.encode())
                     self.last_steering_sent = angles[:]  # Store what we sent
-                    self.get_logger().info(f"[S] {cmd.strip()}")  # Like track.py!
+                    self.get_logger().info(f"[STEERING] {cmd.strip()}")
                     return True
                 except serial.SerialTimeoutException as e:
                     self.get_logger().warn(f"Steer command timeout: {e}")
@@ -349,7 +500,7 @@ class HardwareNode(Node):
         return False
     
     def attempt_reconnect(self):
-        """Attempt to reconnect to Arduino in background"""
+        """Attempt to reconnect to both Arduinos in background"""
         if self._shutdown_requested:
             return
         if self._reconnect_active:
@@ -360,15 +511,21 @@ class HardwareNode(Node):
                 while rclpy.ok() and not self._shutdown_requested:
                     with self.serial_lock:
                         try:
-                            if self.ser:
-                                self.ser.close()
+                            if self.ser_steering:
+                                self.ser_steering.close()
                         except Exception:
                             pass
-                        self.ser = None
+                        try:
+                            if self.ser_drive:
+                                self.ser_drive.close()
+                        except Exception:
+                            pass
+                        self.ser_steering = None
+                        self.ser_drive = None
 
-                    self.get_logger().warn("Attempting to reconnect to Arduino...")
+                    self.get_logger().warn("Attempting to reconnect to Arduinos...")
                     if self.connect_to_arduino():
-                        self.get_logger().info("Reconnected to Arduino")
+                        self.get_logger().info("Reconnected to both Arduinos")
                         return
 
                     if not rclpy.ok() or self._shutdown_requested:
@@ -382,11 +539,13 @@ class HardwareNode(Node):
     
     def process_serial(self):
         """Process serial communication and send pending commands"""
-        # Reconnect if disconnected
-        if self.ser is None or not self.ser.is_open:
-            self.connect_to_arduino()
+        # Reconnect if either Arduino is disconnected
+        if not (self.ser_steering and self.ser_steering.is_open) or \
+           not (self.ser_drive and self.ser_drive.is_open):
+            if not self._reconnect_active:
+                self.connect_to_arduino()
             return
-        
+
         # Send pending steering commands (with retries)
         if self.pending_steering is not None:
             angles = self.pending_steering
@@ -405,13 +564,26 @@ class HardwareNode(Node):
     def destroy_node(self):
         """Clean up resources"""
         self._shutdown_requested = True
-        if self.ser and self.ser.is_open:
+
+        # Stop all motors before disconnecting
+        try:
+            self.send_drive_command([1500, 1500, 1500, 1500], force=True)
+        except Exception:
+            pass
+
+        # Close both serial connections
+        if self.ser_steering and self.ser_steering.is_open:
             try:
-                # Stop all motors
-                self.send_drive_command([1500, 1500, 1500, 1500], force=True)
-                self.ser.close()
+                self.ser_steering.close()
             except Exception:
                 pass
+
+        if self.ser_drive and self.ser_drive.is_open:
+            try:
+                self.ser_drive.close()
+            except Exception:
+                pass
+
         super().destroy_node()
 
 def main(args=None):
@@ -425,9 +597,11 @@ def main(args=None):
         node.send_drive_command([1500, 1500, 1500, 1500], force=True)
         time.sleep(0.1)
     finally:
-        # Close serial connection
-        if node.ser and node.ser.is_open:
-            node.ser.close()
+        # Close both serial connections
+        if node.ser_steering and node.ser_steering.is_open:
+            node.ser_steering.close()
+        if node.ser_drive and node.ser_drive.is_open:
+            node.ser_drive.close()
         node.destroy_node()
         rclpy.shutdown()
 

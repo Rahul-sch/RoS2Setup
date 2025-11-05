@@ -135,7 +135,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'serial_port': '',  # Empty = auto-detect
+            'steering_port': '',  # Empty = auto-detect Arduino #1 (Steering)
+            'drive_port': '',     # Empty = auto-detect Arduino #2 (Drive)
             'serial_baud': 115200,
             'max_speed': 100,
             'wheel_drive_dir': [1, 1, 1, 1],
