@@ -25,7 +25,7 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
-    zip_safe=True,
+    zip_safe=False,
     maintainer='User',
     maintainer_email='user@example.com',
     description='ROS2 package for robot tracking system',

@@ -92,7 +92,7 @@ class RobotAPI(Node, QObject):
             'safety_stop': self.safety_stop
         })
     
-    def move(self, direction: str, speed: int = 50) -> None:
+    def move(self, direction: str, speed: int = 20) -> None:
         twist = Twist()
         if direction == 'up':
             twist.linear.x = float(speed)
