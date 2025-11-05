@@ -437,8 +437,8 @@ class HardwareNode(Node):
         if not force and self.last_sent_pwms is not None and speeds == self.last_sent_pwms:
             return True  # Command already active
 
-        # arduino_drive.ino expects 'S' command, not 'D'
-        cmd = f"S {speeds[0]} {speeds[1]} {speeds[2]} {speeds[3]}\n"
+        # arduino_drive.ino expects 'D' command
+        cmd = f"D {speeds[0]} {speeds[1]} {speeds[2]} {speeds[3]}\n"
 
         need_reconnect = False
         with self.serial_lock:
